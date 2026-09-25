@@ -1,0 +1,60 @@
+{
+  "id": "/",
+  "name": "Cajita POS — Facturación e Inventario",
+  "short_name": "Cajita POS",
+  "description": "Punto de venta offline-first: facturación, inventario, reportes, deudas y nómina.",
+  "lang": "es",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#ffffff",
+  "categories": ["business", "finance", "productivity"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nueva venta (Caja)",
+      "short_name": "Caja",
+      "description": "Abrir la caja para facturar",
+      "url": "/?view=pos",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Inventario",
+      "short_name": "Inventario",
+      "description": "Productos, stock y precios",
+      "url": "/?view=inventario",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Reportes",
+      "short_name": "Reportes",
+      "description": "Ventas, utilidad y productos top",
+      "url": "/?view=reportes",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
