@@ -293,7 +293,7 @@ export default function POSView({ user }) {
 
         {!isOnline && cart.length > 0 && (
           <div className="offline-note">
-            ⚠️ Sin conexión — la venta se sincronizará automáticamente
+            ⚠️ Sin conexión — igual puedes vender, todo queda en este navegador
           </div>
         )}
       </section>

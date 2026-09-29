@@ -54,7 +54,7 @@ function ViewLoader() {
 }
 
 function Shell() {
-  const { currentUser, ready, needsSetup, settings, isOnline, toast, dismissToast, logout, pendingSync } = useStore()
+  const { currentUser, ready, needsSetup, settings, isOnline, toast, dismissToast, logout } = useStore()
   const [view, setView] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('view')
     return fromUrl && VIEW_TITLES[fromUrl] ? fromUrl : 'pos'
@@ -126,12 +126,11 @@ function Shell() {
           onMenu={() => setSidebarOpen(true)}
           title={VIEW_TITLES[current]}
           isOnline={isOnline}
-          pendingSync={pendingSync}
         />
         <main className="main" key={current}>
           {!isOnline && (
             <div className="offline-banner">
-              ⚠️ Sin conexión — los cambios se guardan en este dispositivo y se sincronizarán automáticamente
+              ⚠️ Sin conexión — todo sigue funcionando, los datos están en este navegador
             </div>
           )}
           <Suspense fallback={<ViewLoader />}>

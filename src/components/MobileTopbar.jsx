@@ -1,7 +1,5 @@
-import { fmtHour } from '../utils/format.js'
-
 // Barra superior visible solo en pantallas pequeñas: menú, título, conexión
-export default function MobileTopbar({ onMenu, title, isOnline, pendingSync }) {
+export default function MobileTopbar({ onMenu, title, isOnline }) {
   return (
     <header className="mobile-topbar">
       <button className="icon-btn" onClick={onMenu} aria-label="Abrir menú">
@@ -10,7 +8,7 @@ export default function MobileTopbar({ onMenu, title, isOnline, pendingSync }) {
       <div className="mt-title">
         <strong>{title}</strong>
         <span className={`mt-status ${isOnline ? 'on' : 'off'}`}>
-          {isOnline ? 'En línea' : pendingSync.length > 0 ? `${pendingSync.length} pendientes` : 'Sin conexión'}
+          {isOnline ? 'En línea' : 'Sin conexión'}
         </span>
       </div>
     </header>

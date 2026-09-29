@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { roleLabel } from '../utils/auth.js'
 import { useStore } from '../context/StoreContext.jsx'
-import { fmtHour } from '../utils/format.js'
 import { haptic } from '../utils/haptics.js'
 
 const NAV = [
@@ -17,7 +16,7 @@ const NAV = [
 ]
 
 export default function Sidebar({ view, setView, user, onLogout, allowed, isOpen, onClose }) {
-  const { isOnline, pendingSync, syncing, syncNow, lastSyncAt } = useStore()
+  const { isOnline, settings, exportBackup } = useStore()
   const [installEvt, setInstallEvt] = useState(null)
 
   useEffect(() => {
@@ -53,7 +52,7 @@ export default function Sidebar({ view, setView, user, onLogout, allowed, isOpen
         <span className="logo">🛒</span>
         <div>
           <h1>Cajita POS</h1>
-          <p>Punto de venta</p>
+          <p>{settings?.businessName || 'Punto de venta'}</p>
         </div>
         <button className="sidebar-close" onClick={onClose} aria-label="Cerrar menú">✕</button>
       </div>
@@ -77,20 +76,12 @@ export default function Sidebar({ view, setView, user, onLogout, allowed, isOpen
             <span className={`conn-dot ${isOnline ? 'on' : 'off'}`} />
             <div className="conn-text">
               <strong>{isOnline ? 'En línea' : 'Sin conexión'}</strong>
-              <small>
-                {pendingSync.length > 0
-                  ? `${pendingSync.length} cambio(s) por sincronizar`
-                  : lastSyncAt
-                    ? `Sincronizado ${fmtHour(new Date(lastSyncAt))}`
-                    : 'Todo sincronizado'}
-              </small>
+              <small>Datos guardados en este navegador</small>
             </div>
           </div>
-          {pendingSync.length > 0 && (
-            <button className="btn-ghost btn-sm" onClick={syncNow} disabled={syncing}>
-              {syncing ? 'Sincronizando…' : '🔄 Sincronizar'}
-            </button>
-          )}
+          <button className="btn-ghost btn-sm" onClick={exportBackup} title="Descargar respaldo JSON">
+            💾 Respaldo
+          </button>
         </div>
 
         {installEvt && (

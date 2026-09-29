@@ -103,9 +103,6 @@ export default function SalesView({ owner = null, canVoid = false }) {
             <tr key={s.id} className={s.status === 'anulada' ? 'row-void' : ''}>
               <td>
                 <strong>{saleNumberToString(s.number)}</strong>
-                {s.pendingSync && (
-                  <span className="badge warn" style={{ marginLeft: 6 }}>⏳ Pendiente</span>
-                )}
               </td>
               <td>{fmtDateTime(new Date(s.date))}</td>
               <td>{s.cashier}</td>

@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { saleNumberToString, uid } from '../utils/format.js'
 import { hashPassword } from '../utils/auth.js'
-import { idbGet, idbSet, outboxAdd, outboxAll, outboxClear } from '../db/db.js'
+import { idbGet, idbSet } from '../db/db.js'
 import { DEFAULT_SETTINGS, settingsFromPreset } from '../data/businessSettings.js'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
-import { supabase } from '../lib/supabaseClient.js'
 
 const SESSION_KEY = 'cajita_pos_session'
+const BACKUP_KEY = 'cajita_pos_backup_v1'
 const StoreContext = createContext(null)
 
 // Estado inicial de PRODUCCION: vacio (sin demo)
@@ -35,166 +35,68 @@ function normalizeState(data) {
   }
 }
 
+// Lee de IndexedDB, con respaldo en localStorage como segunda capa local
 async function loadFromStorage() {
   try {
     const stored = await idbGet('state')
     if (stored) return normalizeState(stored)
   } catch {
-    // IndexedDB no disponible
+    // IndexedDB no disponible -> probar localStorage
+  }
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY)
+    if (raw) return normalizeState(JSON.parse(raw))
+  } catch {
+    // sin respaldo
   }
   const empty = buildEmptyState()
-  await idbSet('state', empty).catch(() => {})
+  try { await idbSet('state', empty) } catch { /* ignore */ }
+  try { localStorage.setItem(BACKUP_KEY, JSON.stringify(empty)) } catch { /* ignore */ }
   return empty
 }
 
-async function sbUpsert(table, row) {
-  try { await supabase.from(table).upsert(row) } catch { /* offline */ }
-}
-async function sbDelete(table, id) {
-  try { await supabase.from(table).delete().eq('id', id) } catch { /* offline */ }
+function saveBackup(state) {
+  try { localStorage.setItem(BACKUP_KEY, JSON.stringify(state)) } catch { /* ignore: cuota llena */ }
 }
 
 export function StoreProvider({ children }) {
   const [state, setState] = useState(null)
   const [toast, setToast] = useState(null)
-  const [userId, setUserId] = useState(() => sessionStorage.getItem(SESSION_KEY))
+  const [userId, setUserId] = useState(() => {
+    try { return sessionStorage.getItem(SESSION_KEY) } catch { return null }
+  })
   const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
-  const [pendingSync, setPendingSync] = useState([])
-  const [syncing, setSyncing] = useState(false)
-  const [lastSyncAt, setLastSyncAt] = useState(null)
   const stateRef = useRef(null)
 
   useEffect(() => {
     stateRef.current = state
   }, [state])
 
-  // ---------- Sincronización (offline-first + Supabase) ----------
-  const syncNow = async () => {
-    if (syncing || !stateRef.current) return
-    setSyncing(true)
-    try {
-      const items = await outboxAll().catch(() => [])
-      for (const entry of items) {
-        try {
-          if (entry.type === 'sale') {
-            const sale = stateRef.current.sales.find((s) => s.id === entry.payload?.saleId)
-            if (sale) {
-              await supabase.from('sales').upsert({
-                id: sale.id, number: sale.number, date: sale.date,
-                cashier: sale.cashier, customer: sale.customer || null,
-                items: sale.items, subtotal: sale.subtotal,
-                discount_pct: sale.discountPct || 0, total: sale.total,
-                payment_method: sale.paymentMethod, received: sale.received ?? null,
-                change: sale.change ?? 0, status: sale.status || 'completada',
-              })
-            }
-          } else if (entry.type === 'product_add' || entry.type === 'product_update') {
-            const p = entry.payload?.product || stateRef.current.products.find((x) => x.id === entry.payload?.id)
-            if (p) {
-              await supabase.from('products').upsert({
-                id: p.id, code: p.code, name: p.name, emoji: p.emoji || null,
-                category: p.category || null, price: p.price || 0, cost: p.cost || 0,
-                stock: p.stock ?? 0, min_stock: p.minStock ?? 0,
-              })
-            }
-          } else if (entry.type === 'product_delete') {
-            if (entry.payload?.id) await supabase.from('products').delete().eq('id', entry.payload.id)
-          }
-        } catch { /* siguiente */ }
-      }
-      const saleIds = new Set(items.map((o) => o.payload?.saleId).filter(Boolean))
-      if (saleIds.size) {
-        setState((prev) =>
-          prev
-            ? { ...prev, sales: prev.sales.map((s) => (saleIds.has(s.id) ? { ...s, pendingSync: false } : s)) }
-            : prev,
-        )
-      }
-      await outboxClear().catch(() => {})
-      setPendingSync([])
-      setLastSyncAt(new Date().toISOString())
-      if (items.length) showToast(`${items.length} registro(s) sincronizado(s)`)
-    } catch {
-      showToast('No se pudo sincronizar; se reintentará automáticamente', 'warning')
-    } finally {
-      setSyncing(false)
-    }
-  }
-  const syncNowRef = useRef(syncNow)
-  useEffect(() => {
-    syncNowRef.current = syncNow
-  }, [syncNow])
-
-  const pushOutbox = (type, payload) => {
-    const entry = { id: uid(), type, payload, createdAt: new Date().toISOString() }
-    outboxAdd(entry).catch(() => {})
-    setPendingSync((p) => [...p, entry])
-  }
-
-  // Carga inicial + pull desde Supabase (la nube manda si tiene datos)
+  // Carga inicial 100% local: IndexedDB + respaldo localStorage
   useEffect(() => {
     let cancelled = false
-    loadFromStorage().then(async (data) => {
-      if (cancelled) return
-      try {
-        const [prodRes, salesRes] = await Promise.all([
-          supabase.from('products').select('*').limit(2000),
-          supabase.from('sales').select('*').order('date', { ascending: false }).limit(1000),
-        ])
-        if (!cancelled) {
-          if (prodRes.data && prodRes.data.length) {
-            data.products = prodRes.data.map((r) => ({
-              id: r.id, code: r.code, name: r.name, emoji: r.emoji || '📦',
-              category: r.category || 'General', price: Number(r.price) || 0,
-              cost: Number(r.cost) || 0, stock: r.stock ?? 0, minStock: r.min_stock ?? 0,
-            }))
-          }
-          if (salesRes.data && salesRes.data.length) {
-            data.sales = salesRes.data.map((r) => ({
-              id: r.id, number: r.number, date: r.date, cashier: r.cashier,
-              customer: r.customer || '', items: r.items || [], subtotal: Number(r.subtotal) || 0,
-              discountPct: Number(r.discount_pct) || 0, total: Number(r.total) || 0,
-              paymentMethod: r.payment_method, received: r.received, change: r.change,
-              status: r.status || 'completada',
-            }))
-            const maxNum = Math.max(0, ...data.sales.map((s) => s.number || 0))
-            data.nextInvoice = maxNum + 1
-          }
-        }
-      } catch { /* sin red: local */ }
+    loadFromStorage().then((data) => {
       if (cancelled) return
       setState(data)
-      outboxAll()
-        .then((items) => {
-          if (cancelled) return
-          setPendingSync(items || [])
-          if (typeof navigator !== 'undefined' && navigator.onLine && items && items.length) {
-            syncNowRef.current()
-          }
-        })
-        .catch(() => {})
     })
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Persistencia automática (debounce para no saturar IndexedDB)
+  // Persistencia automática local (debounce): IndexedDB + localStorage
   useEffect(() => {
     if (!state) return
     const t = setTimeout(() => {
       idbSet('state', state).catch(() => {})
+      saveBackup(state)
     }, 250)
     return () => clearTimeout(t)
   }, [state])
 
-  // Eventos de conexión
+  // Solo refleja el estado de red (sin sincronización remota)
   useEffect(() => {
-    if (!state) return
-    const goOnline = () => {
-      setIsOnline(true)
-      syncNowRef.current()
-    }
+    const goOnline = () => setIsOnline(true)
     const goOffline = () => setIsOnline(false)
     window.addEventListener('online', goOnline)
     window.addEventListener('offline', goOffline)
@@ -202,7 +104,7 @@ export function StoreProvider({ children }) {
       window.removeEventListener('online', goOnline)
       window.removeEventListener('offline', goOffline)
     }
-  }, [state])
+  }, [])
 
   const showToast = (message, type = 'success') => setToast({ message, type, id: Date.now() })
   const dismissToast = () => setToast(null)
@@ -222,17 +124,17 @@ export function StoreProvider({ children }) {
     if (!u || !u.active) return { ok: false, error: 'Usuario o contraseña incorrectos' }
     if (u.passwordHash !== hashPassword(password)) return { ok: false, error: 'Usuario o contraseña incorrectos' }
     setUserId(u.id)
-    sessionStorage.setItem(SESSION_KEY, u.id)
+    try { sessionStorage.setItem(SESSION_KEY, u.id) } catch { /* ignore */ }
     showToast(`Bienvenido, ${u.name}`)
     return { ok: true, user: u }
   }
 
   const logout = () => {
     setUserId(null)
-    sessionStorage.removeItem(SESSION_KEY)
+    try { sessionStorage.removeItem(SESSION_KEY) } catch { /* ignore */ }
   }
 
-  // ---------- Ventas ----------
+  // ---------- Ventas (solo local) ----------
   const addSale = (saleDraft) => {
     const s = stateRef.current
     if (!s) return null
@@ -240,25 +142,7 @@ export function StoreProvider({ children }) {
     const d = new Date()
     const p = (x) => String(x).padStart(2, '0')
     const id = `V-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${saleNumberToString(invoiceNumber)}`
-    const online = typeof navigator === 'undefined' ? true : navigator.onLine
-    const sale = { ...saleDraft, id, number: invoiceNumber, ...(online ? {} : { pendingSync: true }) }
-    if (!online) pushOutbox('sale', { saleId: id })
-    else {
-      supabase.from('sales').upsert({
-        id: sale.id, number: sale.number, date: sale.date,
-        cashier: sale.cashier, customer: sale.customer || null,
-        items: sale.items, subtotal: sale.subtotal,
-        discount_pct: sale.discountPct || 0, total: sale.total,
-        payment_method: sale.paymentMethod, received: sale.received ?? null,
-        change: sale.change ?? 0, status: sale.status || 'completada',
-      }).then(() => {}).catch(() => pushOutbox('sale', { saleId: id }))
-      for (const it of sale.items) {
-        const prod = s.products.find((x) => x.id === it.productId)
-        if (prod) {
-          supabase.from('products').update({ stock: Math.max(0, (prod.stock || 0) - it.qty) }).eq('id', prod.id).then(() => {}).catch(() => {})
-        }
-      }
-    }
+    const sale = { ...saleDraft, id, number: invoiceNumber }
     setState((prev) => {
       if (!prev) return prev
       const products = prev.products.map((prod) => {
@@ -278,7 +162,6 @@ export function StoreProvider({ children }) {
     }
     const target = stateRef.current?.sales.find((s) => s.id === saleId)
     if (!target || target.status === 'anulada') return
-    supabase.from('sales').update({ status: 'anulada' }).eq('id', saleId).then(() => {}).catch(() => {})
     setState((prev) => {
       if (!prev) return prev
       const sale = prev.sales.find((s) => s.id === saleId)
@@ -295,41 +178,18 @@ export function StoreProvider({ children }) {
     showToast('Venta anulada y stock restaurado', 'warning')
   }
 
-  // ---------- Productos (local + Supabase) ----------
+  // ---------- Productos (solo local: navegador) ----------
   const addProduct = (product) => {
-    const online = typeof navigator === 'undefined' ? true : navigator.onLine
-    if (!online) pushOutbox('product_add', { product })
-    else sbUpsert('products', {
-      id: product.id, code: product.code, name: product.name, emoji: product.emoji || null,
-      category: product.category || null, price: product.price || 0, cost: product.cost || 0,
-      stock: product.stock ?? 0, min_stock: product.minStock ?? 0,
-    })
     setState((prev) => (prev ? { ...prev, products: [...prev.products, product] } : prev))
     showToast('Producto agregado al inventario')
   }
   const updateProduct = (id, updates) => {
-    const online = typeof navigator === 'undefined' ? true : navigator.onLine
-    if (!online) pushOutbox('product_update', { id, updates })
-    else {
-      const cur = stateRef.current?.products.find((x) => x.id === id)
-      if (cur) {
-        const merged = { ...cur, ...updates }
-        sbUpsert('products', {
-          id: merged.id, code: merged.code, name: merged.name, emoji: merged.emoji || null,
-          category: merged.category || null, price: merged.price || 0, cost: merged.cost || 0,
-          stock: merged.stock ?? 0, min_stock: merged.minStock ?? 0,
-        })
-      }
-    }
     setState((prev) =>
       prev ? { ...prev, products: prev.products.map((p) => (p.id === id ? { ...p, ...updates } : p)) } : prev,
     )
     showToast('Producto actualizado')
   }
   const deleteProduct = (id) => {
-    const online = typeof navigator === 'undefined' ? true : navigator.onLine
-    if (!online) pushOutbox('product_delete', { id })
-    else sbDelete('products', id)
     setState((prev) => (prev ? { ...prev, products: prev.products.filter((p) => p.id !== id) } : prev))
     showToast('Producto eliminado', 'warning')
   }
@@ -468,10 +328,50 @@ export function StoreProvider({ children }) {
         users: keepUsers ? prev.users : [],
       }
     })
-    outboxClear().catch(() => {})
-    setPendingSync([])
     showToast('Datos borrados: la app quedo en cero', 'warning')
   }
+
+  // Exportar respaldo JSON (descarga) e importar respaldo
+  const exportBackup = () => {
+    const s = stateRef.current
+    if (!s) return
+    try {
+      const blob = new Blob([JSON.stringify({ app: 'tu-cajita-facturadora', version: 1, exportedAt: new Date().toISOString(), state: s }, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `cajita-respaldo-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      showToast('Respaldo descargado')
+    } catch {
+      showToast('No se pudo crear el respaldo', 'warning')
+    }
+  }
+
+  const importBackup = (file) => new Promise((resolve) => {
+    if (!file) { resolve({ ok: false }); return }
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result)
+        const data = normalizeState(parsed.state || parsed)
+        setState(data)
+        showToast('Respaldo restaurado')
+        resolve({ ok: true })
+      } catch {
+        showToast('Archivo de respaldo inválido', 'warning')
+        resolve({ ok: false })
+      }
+    }
+    reader.onerror = () => {
+      showToast('No se pudo leer el archivo', 'warning')
+      resolve({ ok: false })
+    }
+    reader.readAsText(file)
+  })
 
   const value = useMemo(
     () => ({
@@ -486,10 +386,9 @@ export function StoreProvider({ children }) {
       needsSetup: !!state && (!state.settings?.setupCompleted || !state.users.length),
       currentUser,
       isOnline,
-      pendingSync,
-      syncing,
-      lastSyncAt,
-      syncNow,
+      pendingSync: [],
+      syncing: false,
+      lastSyncAt: null,
       toast,
       showToast,
       dismissToast,
@@ -499,6 +398,8 @@ export function StoreProvider({ children }) {
       updateSettings,
       applyPreset,
       clearAllData,
+      exportBackup,
+      importBackup,
       addSale,
       voidSale,
       addProduct,
@@ -514,7 +415,7 @@ export function StoreProvider({ children }) {
       removePayroll,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, toast, currentUser, isOnline, pendingSync, syncing, lastSyncAt],
+    [state, toast, currentUser, isOnline],
   )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>

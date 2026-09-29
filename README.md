@@ -1,4 +1,8 @@
-# 🛒 Cajita POS — Sistema de Punto de Venta
+# 🛒 Tu Cajita Facturadora — Sistema de Punto de Venta
+
+> **🚀 Producción:** https://tu-cajita-facturadora.vercel.app/
+> **💻 Desarrollo local:** http://localhost:5173 (`npm run dev`)
+> **📦 Repositorio:** https://github.com/juancaDev1914/tu_cajita_facturadora
 
 Aplicación web **offline-first** de punto de venta (POS) completa, construida con React + Vite y empaquetada como **PWA instalable**. Diseñada para funcionar en tablets, PC y navegadores modernos como una aplicación de negocio local sin depender de un servidor backend continuo.
 
@@ -592,7 +596,8 @@ npm install
 
 ```bash
 npm run dev
-# Abre http://localhost:5173 en tu navegador
+# Desarrollo: http://localhost:5173 (no usar en producción)
+# Producción: https://tu-cajita-facturadora.vercel.app/
 # El servidor se recarga automáticamente al guardar cambios
 ```
 
