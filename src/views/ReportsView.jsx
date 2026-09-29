@@ -3,7 +3,8 @@ import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDate, fmtDateTime, paymentLabel, startOfWeek, MONTHS_SHORT, downloadCSV } from '../utils/format.js'
 
 export default function ReportsView() {
-  const { sales } = useStore()
+  const { sales, settings } = useStore()
+  const payMethods = settings?.paymentMethods
 
   const [fromStr, setFromStr] = useState(() => {
     const d = new Date()
@@ -181,7 +182,7 @@ export default function ReportsView() {
         <div className="methods-grid">
           {methods.map((m) => (
             <div key={m.method} className="method-card">
-              <span>{paymentLabel(m.method)}</span>
+              <span>{paymentLabel(m.method, payMethods)}</span>
               <strong>{formatMoney(m.revenue)}</strong>
               <small>{m.sales} ventas</small>
             </div>

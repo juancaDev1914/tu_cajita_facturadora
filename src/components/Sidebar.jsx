@@ -13,9 +13,10 @@ const NAV = [
   { id: 'deudas', label: 'Deudas', icon: '💳' },
   { id: 'nomina', label: 'Nómina', icon: '👥' },
   { id: 'usuarios', label: 'Usuarios', icon: '🔐' },
+  { id: 'configuracion', label: 'Configuración', icon: '⚙️' },
 ]
 
-export default function Sidebar({ view, setView, onReset, user, onLogout, allowed, isOpen, onClose }) {
+export default function Sidebar({ view, setView, user, onLogout, allowed, isOpen, onClose }) {
   const { isOnline, pendingSync, syncing, syncNow, lastSyncAt } = useStore()
   const [installEvt, setInstallEvt] = useState(null)
 
@@ -71,12 +72,6 @@ export default function Sidebar({ view, setView, onReset, user, onLogout, allowe
       </nav>
 
       <div className="sidebar-foot">
-        {user?.role === 'admin' && (
-          <button className="btn-ghost btn-sm" onClick={onReset} title="Restablecer datos de demostración">
-            ♻️ Restablecer demo
-          </button>
-        )}
-
         <div className="conn-bar">
           <div className="conn-status">
             <span className={`conn-dot ${isOnline ? 'on' : 'off'}`} />

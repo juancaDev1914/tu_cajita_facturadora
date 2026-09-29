@@ -4,7 +4,8 @@ import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDateTime, paymentLabel, saleNumberToString } from '../utils/format.js'
 
 export default function SalesView({ owner = null, canVoid = false }) {
-  const { sales, voidSale } = useStore()
+  const { sales, voidSale, settings } = useStore()
+  const payMethods = settings?.paymentMethods
 
   const [search, setSearch] = useState('')
   const [fromStr, setFromStr] = useState('')
@@ -111,7 +112,7 @@ export default function SalesView({ owner = null, canVoid = false }) {
               <td>{s.customer || '—'}</td>
               <td>{s.items.reduce((a, i) => a + i.qty, 0)}</td>
               <td><strong>{formatMoney(s.total)}</strong></td>
-              <td>{paymentLabel(s.paymentMethod)}</td>
+              <td>{paymentLabel(s.paymentMethod, payMethods)}</td>
               <td>
                 <span className={`badge ${s.status === 'completada' ? 'ok' : 'danger'}`}>
                   {s.status === 'completada' ? 'Completada' : 'Anulada'}
@@ -139,7 +140,7 @@ export default function SalesView({ owner = null, canVoid = false }) {
             <p><strong>Fecha:</strong> {fmtDateTime(new Date(detail.date))}</p>
             <p><strong>Cajero:</strong> {detail.cashier}</p>
             <p><strong>Cliente:</strong> {detail.customer || '—'}</p>
-            <p><strong>Pago:</strong> {paymentLabel(detail.paymentMethod)}</p>
+            <p><strong>Pago:</strong> {paymentLabel(detail.paymentMethod, payMethods)}</p>
           </div>
           <table className="table compact">
             <thead>

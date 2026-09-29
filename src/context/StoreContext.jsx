@@ -1,36 +1,37 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { getSeedData, getSeedUsers } from '../data/seed.js'
 import { saleNumberToString, uid } from '../utils/format.js'
 import { hashPassword } from '../utils/auth.js'
 import { idbGet, idbSet, outboxAdd, outboxAll, outboxClear } from '../db/db.js'
+import { DEFAULT_SETTINGS, settingsFromPreset } from '../data/businessSettings.js'
+import { BUSINESS_PRESETS } from '../data/businessPresets.js'
+import { supabase } from '../lib/supabaseClient.js'
 
-const LEGACY_KEYS = ['cajita_pos_state_v2', 'cajita_pos_data_v1']
 const SESSION_KEY = 'cajita_pos_session'
 const StoreContext = createContext(null)
 
-function buildDefaults() {
-  const demo = getSeedData()
+// Estado inicial de PRODUCCION: vacio (sin demo)
+function buildEmptyState(settings = DEFAULT_SETTINGS) {
   return {
-    products: demo.products,
-    sales: demo.sales,
-    nextInvoice: demo.sales.length + 1,
-    users: getSeedUsers(),
+    products: [],
+    sales: [],
+    nextInvoice: 1,
+    users: [],
     debts: [],
     payrolls: [],
+    settings: { ...DEFAULT_SETTINGS, ...settings },
   }
 }
 
 function normalizeState(data) {
-  const d = buildDefaults()
+  const settings = { ...DEFAULT_SETTINGS, ...(data?.settings || {}) }
   return {
-    ...d,
-    ...(data || {}),
-    products: Array.isArray(data?.products) ? data.products : d.products,
-    sales: Array.isArray(data?.sales) ? data.sales : d.sales,
-    users: Array.isArray(data?.users) && data.users.length ? data.users : d.users,
+    products: Array.isArray(data?.products) ? data.products : [],
+    sales: Array.isArray(data?.sales) ? data.sales : [],
+    users: Array.isArray(data?.users) ? data.users : [],
     debts: Array.isArray(data?.debts) ? data.debts : [],
     payrolls: Array.isArray(data?.payrolls) ? data.payrolls : [],
-    nextInvoice: typeof data?.nextInvoice === 'number' ? data.nextInvoice : d.nextInvoice,
+    nextInvoice: typeof data?.nextInvoice === 'number' ? data.nextInvoice : 1,
+    settings,
   }
 }
 
@@ -41,23 +42,16 @@ async function loadFromStorage() {
   } catch {
     // IndexedDB no disponible
   }
-  // Migración desde localStorage (versiones anteriores)
-  for (const key of LEGACY_KEYS) {
-    try {
-      const raw = localStorage.getItem(key)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        const norm = normalizeState(parsed)
-        await idbSet('state', norm).catch(() => {})
-        return norm
-      }
-    } catch {
-      // seguir
-    }
-  }
-  const defaults = buildDefaults()
-  await idbSet('state', defaults).catch(() => {})
-  return defaults
+  const empty = buildEmptyState()
+  await idbSet('state', empty).catch(() => {})
+  return empty
+}
+
+async function sbUpsert(table, row) {
+  try { await supabase.from(table).upsert(row) } catch { /* offline */ }
+}
+async function sbDelete(table, id) {
+  try { await supabase.from(table).delete().eq('id', id) } catch { /* offline */ }
 }
 
 export function StoreProvider({ children }) {
@@ -74,13 +68,40 @@ export function StoreProvider({ children }) {
     stateRef.current = state
   }, [state])
 
-  // ---------- Sincronización (offline-first) ----------
+  // ---------- Sincronización (offline-first + Supabase) ----------
   const syncNow = async () => {
     if (syncing || !stateRef.current) return
     setSyncing(true)
     try {
-      await new Promise((r) => setTimeout(r, 700)) // simula envío al servidor
       const items = await outboxAll().catch(() => [])
+      for (const entry of items) {
+        try {
+          if (entry.type === 'sale') {
+            const sale = stateRef.current.sales.find((s) => s.id === entry.payload?.saleId)
+            if (sale) {
+              await supabase.from('sales').upsert({
+                id: sale.id, number: sale.number, date: sale.date,
+                cashier: sale.cashier, customer: sale.customer || null,
+                items: sale.items, subtotal: sale.subtotal,
+                discount_pct: sale.discountPct || 0, total: sale.total,
+                payment_method: sale.paymentMethod, received: sale.received ?? null,
+                change: sale.change ?? 0, status: sale.status || 'completada',
+              })
+            }
+          } else if (entry.type === 'product_add' || entry.type === 'product_update') {
+            const p = entry.payload?.product || stateRef.current.products.find((x) => x.id === entry.payload?.id)
+            if (p) {
+              await supabase.from('products').upsert({
+                id: p.id, code: p.code, name: p.name, emoji: p.emoji || null,
+                category: p.category || null, price: p.price || 0, cost: p.cost || 0,
+                stock: p.stock ?? 0, min_stock: p.minStock ?? 0,
+              })
+            }
+          } else if (entry.type === 'product_delete') {
+            if (entry.payload?.id) await supabase.from('products').delete().eq('id', entry.payload.id)
+          }
+        } catch { /* siguiente */ }
+      }
       const saleIds = new Set(items.map((o) => o.payload?.saleId).filter(Boolean))
       if (saleIds.size) {
         setState((prev) =>
@@ -110,10 +131,37 @@ export function StoreProvider({ children }) {
     setPendingSync((p) => [...p, entry])
   }
 
-  // Carga inicial desde IndexedDB (con migración desde localStorage)
+  // Carga inicial + pull desde Supabase (la nube manda si tiene datos)
   useEffect(() => {
     let cancelled = false
-    loadFromStorage().then((data) => {
+    loadFromStorage().then(async (data) => {
+      if (cancelled) return
+      try {
+        const [prodRes, salesRes] = await Promise.all([
+          supabase.from('products').select('*').limit(2000),
+          supabase.from('sales').select('*').order('date', { ascending: false }).limit(1000),
+        ])
+        if (!cancelled) {
+          if (prodRes.data && prodRes.data.length) {
+            data.products = prodRes.data.map((r) => ({
+              id: r.id, code: r.code, name: r.name, emoji: r.emoji || '📦',
+              category: r.category || 'General', price: Number(r.price) || 0,
+              cost: Number(r.cost) || 0, stock: r.stock ?? 0, minStock: r.min_stock ?? 0,
+            }))
+          }
+          if (salesRes.data && salesRes.data.length) {
+            data.sales = salesRes.data.map((r) => ({
+              id: r.id, number: r.number, date: r.date, cashier: r.cashier,
+              customer: r.customer || '', items: r.items || [], subtotal: Number(r.subtotal) || 0,
+              discountPct: Number(r.discount_pct) || 0, total: Number(r.total) || 0,
+              paymentMethod: r.payment_method, received: r.received, change: r.change,
+              status: r.status || 'completada',
+            }))
+            const maxNum = Math.max(0, ...data.sales.map((s) => s.number || 0))
+            data.nextInvoice = maxNum + 1
+          }
+        }
+      } catch { /* sin red: local */ }
       if (cancelled) return
       setState(data)
       outboxAll()
@@ -167,6 +215,7 @@ export function StoreProvider({ children }) {
 
   const login = (username, password) => {
     if (!state) return { ok: false, error: 'Cargando datos…' }
+    if (!state.users.length) return { ok: false, error: 'Sin usuarios: completa la configuración inicial' }
     const u = state.users.find(
       (x) => x.username.trim().toLowerCase() === String(username).trim().toLowerCase(),
     )
@@ -191,9 +240,25 @@ export function StoreProvider({ children }) {
     const d = new Date()
     const p = (x) => String(x).padStart(2, '0')
     const id = `V-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${saleNumberToString(invoiceNumber)}`
-    const offline = !isOnline
-    const sale = { ...saleDraft, id, number: invoiceNumber, ...(offline ? { pendingSync: true } : {}) }
-    if (offline) pushOutbox('sale', { saleId: id })
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine
+    const sale = { ...saleDraft, id, number: invoiceNumber, ...(online ? {} : { pendingSync: true }) }
+    if (!online) pushOutbox('sale', { saleId: id })
+    else {
+      supabase.from('sales').upsert({
+        id: sale.id, number: sale.number, date: sale.date,
+        cashier: sale.cashier, customer: sale.customer || null,
+        items: sale.items, subtotal: sale.subtotal,
+        discount_pct: sale.discountPct || 0, total: sale.total,
+        payment_method: sale.paymentMethod, received: sale.received ?? null,
+        change: sale.change ?? 0, status: sale.status || 'completada',
+      }).then(() => {}).catch(() => pushOutbox('sale', { saleId: id }))
+      for (const it of sale.items) {
+        const prod = s.products.find((x) => x.id === it.productId)
+        if (prod) {
+          supabase.from('products').update({ stock: Math.max(0, (prod.stock || 0) - it.qty) }).eq('id', prod.id).then(() => {}).catch(() => {})
+        }
+      }
+    }
     setState((prev) => {
       if (!prev) return prev
       const products = prev.products.map((prod) => {
@@ -213,6 +278,7 @@ export function StoreProvider({ children }) {
     }
     const target = stateRef.current?.sales.find((s) => s.id === saleId)
     if (!target || target.status === 'anulada') return
+    supabase.from('sales').update({ status: 'anulada' }).eq('id', saleId).then(() => {}).catch(() => {})
     setState((prev) => {
       if (!prev) return prev
       const sale = prev.sales.find((s) => s.id === saleId)
@@ -229,21 +295,41 @@ export function StoreProvider({ children }) {
     showToast('Venta anulada y stock restaurado', 'warning')
   }
 
-  // ---------- Productos ----------
+  // ---------- Productos (local + Supabase) ----------
   const addProduct = (product) => {
-    if (!isOnline) pushOutbox('product_add', { product })
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine
+    if (!online) pushOutbox('product_add', { product })
+    else sbUpsert('products', {
+      id: product.id, code: product.code, name: product.name, emoji: product.emoji || null,
+      category: product.category || null, price: product.price || 0, cost: product.cost || 0,
+      stock: product.stock ?? 0, min_stock: product.minStock ?? 0,
+    })
     setState((prev) => (prev ? { ...prev, products: [...prev.products, product] } : prev))
     showToast('Producto agregado al inventario')
   }
   const updateProduct = (id, updates) => {
-    if (!isOnline) pushOutbox('product_update', { id, updates })
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine
+    if (!online) pushOutbox('product_update', { id, updates })
+    else {
+      const cur = stateRef.current?.products.find((x) => x.id === id)
+      if (cur) {
+        const merged = { ...cur, ...updates }
+        sbUpsert('products', {
+          id: merged.id, code: merged.code, name: merged.name, emoji: merged.emoji || null,
+          category: merged.category || null, price: merged.price || 0, cost: merged.cost || 0,
+          stock: merged.stock ?? 0, min_stock: merged.minStock ?? 0,
+        })
+      }
+    }
     setState((prev) =>
       prev ? { ...prev, products: prev.products.map((p) => (p.id === id ? { ...p, ...updates } : p)) } : prev,
     )
     showToast('Producto actualizado')
   }
   const deleteProduct = (id) => {
-    if (!isOnline) pushOutbox('product_delete', { id })
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine
+    if (!online) pushOutbox('product_delete', { id })
+    else sbDelete('products', id)
     setState((prev) => (prev ? { ...prev, products: prev.products.filter((p) => p.id !== id) } : prev))
     showToast('Producto eliminado', 'warning')
   }
@@ -316,17 +402,75 @@ export function StoreProvider({ children }) {
     showToast('Registro de pago eliminado', 'warning')
   }
 
-  const resetDemo = () => {
-    const demo = getSeedData()
-    setState((prev) => ({
-      products: demo.products,
-      sales: demo.sales,
-      nextInvoice: demo.sales.length + 1,
-      users: prev?.users || getSeedUsers(),
-      debts: [],
-      payrolls: [],
-    }))
-    showToast('Datos de demostración restablecidos')
+  // ---------- Setup inicial / Configuracion del negocio ----------
+  const completeSetup = ({ businessName, businessType, address, phone, adminName, adminUser, adminPass }) => {
+    if (!businessName?.trim()) {
+      showToast('Escribe el nombre del negocio', 'warning')
+      return { ok: false }
+    }
+    if (!adminUser?.trim() || !adminPass || adminPass.length < 4) {
+      showToast('Crea un admin con clave de minimo 4 caracteres', 'warning')
+      return { ok: false }
+    }
+    const base = stateRef.current || buildEmptyState()
+    const settings = settingsFromPreset(businessType, {
+      businessName: businessName.trim(),
+      address: address?.trim() || '',
+      phone: phone?.trim() || '',
+      setupCompleted: true,
+    })
+    const admin = {
+      id: uid(),
+      username: adminUser.trim(),
+      name: adminName?.trim() || 'Administrador',
+      role: 'admin',
+      passwordHash: hashPassword(adminPass),
+      active: true,
+      baseSalary: 0,
+      commissionPct: 0,
+      createdAt: new Date().toISOString(),
+    }
+    setState({ ...base, settings, users: [admin], products: [], sales: [], nextInvoice: 1, debts: [], payrolls: [] })
+    setUserId(admin.id)
+    try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
+    const preset = BUSINESS_PRESETS[businessType]
+    showToast(`¡${settings.businessName} listo!${preset ? ` Plantilla ${preset.label} aplicada.` : ''}`)
+    return { ok: true }
+  }
+
+  const updateSettings = (patch) => {
+    setState((prev) => (prev ? { ...prev, settings: { ...prev.settings, ...patch } } : prev))
+    showToast('Configuración guardada')
+  }
+
+  const applyPreset = (presetId) => {
+    const preset = BUSINESS_PRESETS[presetId]
+    if (!preset) return
+    setState((prev) => {
+      if (!prev) return prev
+      const settings = settingsFromPreset(presetId, { ...prev.settings, setupCompleted: true })
+      return { ...prev, settings }
+    })
+    showToast(`Plantilla ${preset.label} aplicada: revisa pagos y modulos`)
+  }
+
+  // Borra TODO y deja la app en cero (produccion). keepUsers=true conserva el admin.
+  const clearAllData = (keepUsers = true) => {
+    setState((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        products: [],
+        sales: [],
+        nextInvoice: 1,
+        debts: [],
+        payrolls: [],
+        users: keepUsers ? prev.users : [],
+      }
+    })
+    outboxClear().catch(() => {})
+    setPendingSync([])
+    showToast('Datos borrados: la app quedo en cero', 'warning')
   }
 
   const value = useMemo(
@@ -338,6 +482,8 @@ export function StoreProvider({ children }) {
       users: state?.users || [],
       debts: state?.debts || [],
       payrolls: state?.payrolls || [],
+      settings: state?.settings || { ...DEFAULT_SETTINGS },
+      needsSetup: !!state && (!state.settings?.setupCompleted || !state.users.length),
       currentUser,
       isOnline,
       pendingSync,
@@ -349,6 +495,10 @@ export function StoreProvider({ children }) {
       dismissToast,
       login,
       logout,
+      completeSetup,
+      updateSettings,
+      applyPreset,
+      clearAllData,
       addSale,
       voidSale,
       addProduct,
@@ -362,7 +512,6 @@ export function StoreProvider({ children }) {
       deleteDebt,
       recordPayroll,
       removePayroll,
-      resetDemo,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state, toast, currentUser, isOnline, pendingSync, syncing, lastSyncAt],

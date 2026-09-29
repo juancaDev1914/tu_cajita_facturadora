@@ -5,6 +5,7 @@ import MobileTopbar from './components/MobileTopbar.jsx'
 import BottomNav from './components/BottomNav.jsx'
 import Toast from './components/Toast.jsx'
 import LoginView from './views/LoginView.jsx'
+import SetupWizard from './views/SetupWizard.jsx'
 import useBackGuard from './hooks/useBackGuard.js'
 
 // Lazy loading de vistas para reducir el bundle inicial
@@ -16,9 +17,7 @@ const DashboardView = lazy(() => import('./views/DashboardView.jsx'))
 const DebtView = lazy(() => import('./views/DebtView.jsx'))
 const PayrollView = lazy(() => import('./views/PayrollView.jsx'))
 const UsersView = lazy(() => import('./views/UsersView.jsx'))
-
-const ADMIN_VIEWS = ['pos', 'inventario', 'historial', 'reportes', 'dashboard', 'deudas', 'nomina', 'usuarios']
-const VENDOR_VIEWS = ['pos', 'historial']
+const SettingsView = lazy(() => import('./views/SettingsView.jsx'))
 
 const VIEW_TITLES = {
   pos: 'Caja / Facturación',
@@ -29,14 +28,18 @@ const VIEW_TITLES = {
   deudas: 'Deudas',
   nomina: 'Nómina',
   usuarios: 'Usuarios',
+  configuracion: 'Configuración',
 }
+
+const ALL_ADMIN_VIEWS = ['pos', 'inventario', 'historial', 'reportes', 'dashboard', 'deudas', 'nomina', 'usuarios', 'configuracion']
+const VENDOR_VIEWS = ['pos', 'historial']
 
 function LoadingScreen() {
   return (
     <div className="loading-screen">
       <span className="logo">🛒</span>
       <h1>Cajita POS</h1>
-      <p>Cargando datos locales…</p>
+      <p>Cargando…</p>
       <div className="spinner" />
     </div>
   )
@@ -51,30 +54,30 @@ function ViewLoader() {
 }
 
 function Shell() {
-  const { currentUser, ready, isOnline, toast, dismissToast, resetDemo, logout, pendingSync } = useStore()
-  // Permite abrir una vista directa desde el ícono del teléfono (?view=inventario, atajos de Android)
+  const { currentUser, ready, needsSetup, settings, isOnline, toast, dismissToast, logout, pendingSync } = useStore()
   const [view, setView] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('view')
     return fromUrl && VIEW_TITLES[fromUrl] ? fromUrl : 'pos'
   })
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const allowed = currentUser?.role === 'admin' ? ADMIN_VIEWS : VENDOR_VIEWS
+  // Vistas permitidas = rol × módulos activos en configuración
+  const modules = settings?.modules || ALL_ADMIN_VIEWS
+  const adminAllowed = ALL_ADMIN_VIEWS.filter((v) => v === 'configuracion' || modules.includes(v))
+  const allowed = currentUser?.role === 'admin' ? adminAllowed : VENDOR_VIEWS
 
-  // El gesto/botón Atrás de Android cierra el menú lateral antes de salir de la app
   useBackGuard(sidebarOpen, () => setSidebarOpen(false))
 
-  // Barra de estado del teléfono: oscura en el login, clara dentro de la app (como app nativa)
   useEffect(() => {
     const meta = document.querySelector('meta[name="theme-color"]')
     if (meta) meta.setAttribute('content', currentUser ? '#ffffff' : '#0f172a')
   }, [currentUser])
 
   useEffect(() => {
-    if (ready && (!currentUser || !allowed.includes(view))) setView('pos')
-  }, [ready, currentUser, view, allowed])
+    if (ready && currentUser && !allowed.includes(view)) setView('pos')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, currentUser, settings?.modules])
 
-  // Cerrar sidebar al cambiar de vista en móvil
   const handleViewChange = (newView) => {
     setView(newView)
     setSidebarOpen(false)
@@ -82,6 +85,15 @@ function Shell() {
 
   if (!ready) return <LoadingScreen />
 
+  // 1) Sin configuración inicial → asistente (solo primera vez)
+  if (needsSetup) return (
+    <>
+      <SetupWizard />
+      <Toast toast={toast} onClose={dismissToast} />
+    </>
+  )
+
+  // 2) Sin sesión → login
   if (!currentUser) {
     return (
       <>
@@ -95,7 +107,6 @@ function Shell() {
 
   return (
     <div className="app has-bottom-nav">
-      {/* Overlay para cerrar sidebar en móvil */}
       {sidebarOpen && (
         <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
       )}
@@ -103,7 +114,6 @@ function Shell() {
       <Sidebar
         view={current}
         setView={handleViewChange}
-        onReset={resetDemo}
         user={currentUser}
         onLogout={logout}
         allowed={allowed}
@@ -138,11 +148,11 @@ function Shell() {
             {current === 'deudas' && <DebtView />}
             {current === 'nomina' && <PayrollView />}
             {current === 'usuarios' && <UsersView />}
+            {current === 'configuracion' && <SettingsView />}
           </Suspense>
         </main>
       </div>
 
-      {/* Barra inferior nativa (solo teléfono/tablet): control total desde el móvil */}
       <BottomNav
         view={current}
         setView={handleViewChange}

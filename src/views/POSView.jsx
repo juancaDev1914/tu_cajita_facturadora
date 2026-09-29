@@ -2,12 +2,13 @@ import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { haptic, TAP, SUCCESS } from '../utils/haptics.js'
-import { formatMoney, fmtDateTime, PAYMENT_METHODS, paymentLabel, STORE_NAME, STORE_ADDRESS, STORE_PHONE } from '../utils/format.js'
+import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel } from '../utils/format.js'
 
 const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
 
 export default function POSView({ user }) {
-  const { products, addSale, showToast, isOnline } = useStore()
+  const { products, addSale, showToast, isOnline, settings } = useStore()
+  const paymentMethods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
 
   const [cashier, setCashier] = useState(user?.name || 'Cajero 1')
   const [customer, setCustomer] = useState('')
@@ -320,7 +321,7 @@ export default function POSView({ user }) {
             <strong>{formatMoney(total)}</strong>
           </div>
           <div className="pay-methods">
-            {PAYMENT_METHODS.map((m) => (
+            {paymentMethods.map((m) => (
               <button
                 key={m.id}
                 className={`pay-method ${paymentMethod === m.id ? 'active' : ''}`}
@@ -368,9 +369,9 @@ export default function POSView({ user }) {
         >
           <div className="receipt">
             <div className="r-head">
-              <strong>{STORE_NAME}</strong>
-              <span>{STORE_ADDRESS}</span>
-              <span>Tel: {STORE_PHONE}</span>
+              <strong>{settings?.businessName || 'Mi Negocio'}</strong>
+              {settings?.address ? <span>{settings.address}</span> : null}
+              {settings?.phone ? <span>Tel: {settings.phone}</span> : null}
             </div>
             <div className="r-meta">
               <span>Factura N° {saleNumber(receipt.number)}</span>
@@ -393,7 +394,7 @@ export default function POSView({ user }) {
                 <span>Descuento {receipt.discountPct}%: −{formatMoney(Math.round((receipt.subtotal * receipt.discountPct) / 100))}</span>
               )}
               <strong>TOTAL: {formatMoney(receipt.total)}</strong>
-              <span>Pago: {paymentLabel(receipt.paymentMethod)}</span>
+              <span>Pago: {paymentLabel(receipt.paymentMethod, paymentMethods)}</span>
               {isCashMethod(receipt.paymentMethod) && (
                 <>
                   <span>Recibido: {formatMoney(receipt.received)}</span>
@@ -401,7 +402,7 @@ export default function POSView({ user }) {
                 </>
               )}
             </div>
-            <div className="r-foot">¡Gracias por su compra!</div>
+            <div className="r-foot">{settings?.ticketFooter || 'Gracias por su compra!'}</div>
           </div>
         </Modal>
       )}

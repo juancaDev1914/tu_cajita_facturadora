@@ -1,20 +1,19 @@
-// ===== Configuración global del negocio =====
-export const STORE_NAME = 'Mi Tienda'
-export const STORE_ADDRESS = 'Cra 10 # 20-30, Local 4'
-export const STORE_PHONE = '300 000 0000'
-
+// ===== Configuración global (moneda, formato) =====
+// NOTA: nombre/dirección/teléfono/pagos del negocio viven en settings (StoreContext),
+// no aquí. Esto solo es formato de moneda.
 export const CURRENCY_CODE = 'COP'
 export const LOCALE = 'es-CO'
 
-export const PAYMENT_METHODS = [
+// Fallback si settings aún no cargan
+export const FALLBACK_PAYMENTS = [
   { id: 'efectivo', label: '💵 Efectivo' },
   { id: 'tarjeta', label: '💳 Tarjeta' },
   { id: 'transferencia', label: '🏦 Transferencia' },
   { id: 'nequi', label: '📱 Nequi / Daviplata' },
 ]
 
-export const paymentLabel = (id) =>
-  PAYMENT_METHODS.find((p) => p.id === id)?.label || id
+export const paymentLabel = (id, methods = FALLBACK_PAYMENTS) =>
+  methods.find((p) => p.id === id)?.label || id
 
 // ---------- Dinero ----------
 export function formatMoney(n, { compact = false } = {}) {

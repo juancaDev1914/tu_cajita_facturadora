@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { useStore } from '../context/StoreContext.jsx'
-import { STORE_NAME } from '../utils/format.js'
 
 export default function LoginView() {
-  const { login } = useStore()
+  const { login, settings } = useStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -19,12 +18,6 @@ export default function LoginView() {
     if (!res.ok) setError(res.error)
   }
 
-  const quickFill = (u, p) => {
-    setUsername(u)
-    setPassword(p)
-    setError('')
-  }
-
   return (
     <div className="login-screen">
       <form className="login-card" onSubmit={submit}>
@@ -32,7 +25,7 @@ export default function LoginView() {
           <span className="logo">🛒</span>
           <div>
             <h1>Cajita POS</h1>
-            <p>Inicia sesión en {STORE_NAME}</p>
+            <p>Inicia sesión en {settings?.businessName || 'tu negocio'}</p>
           </div>
         </div>
 
@@ -67,16 +60,6 @@ export default function LoginView() {
         </label>
 
         <button className="btn-primary btn-big" type="submit">🔑 Iniciar sesión</button>
-
-        <div className="login-hint">
-          <strong>Accesos de demostración</strong>
-          <button type="button" className="login-quick" onClick={() => quickFill('admin', 'admin123')}>
-            👑 <span>Admin:</span> <code>admin / admin123</code>
-          </button>
-          <button type="button" className="login-quick" onClick={() => quickFill('cajero1', 'cajero123')}>
-            🧾 <span>Cajero:</span> <code>cajero1 / cajero123</code>
-          </button>
-        </div>
       </form>
     </div>
   )
