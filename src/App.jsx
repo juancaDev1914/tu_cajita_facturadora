@@ -35,10 +35,11 @@ const ALL_ADMIN_VIEWS = ['pos', 'inventario', 'historial', 'reportes', 'dashboar
 const VENDOR_VIEWS = ['pos', 'historial']
 
 function LoadingScreen() {
+  const { settings } = useStore()
   return (
     <div className="loading-screen">
       <span className="logo">🛒</span>
-      <h1>Cajita POS</h1>
+      <h1>{settings?.businessName || 'Tu Cajita Facturadora'}</h1>
       <p>Cargando…</p>
       <div className="spinner" />
     </div>
@@ -73,11 +74,7 @@ function Shell() {
     if (meta) meta.setAttribute('content', currentUser ? '#ffffff' : '#0f172a')
   }, [currentUser])
 
-  useEffect(() => {
-    if (ready && currentUser && !allowed.includes(view)) setView('pos')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, currentUser, settings?.modules])
-
+  // La vista no permitida se resuelve en el render (ver `current` abajo), sin effect
   const handleViewChange = (newView) => {
     setView(newView)
     setSidebarOpen(false)

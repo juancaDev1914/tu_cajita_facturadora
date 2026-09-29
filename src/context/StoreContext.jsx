@@ -298,9 +298,9 @@ export function StoreProvider({ children }) {
     return { ok: true }
   }
 
-  const updateSettings = (patch) => {
+  const updateSettings = (patch, { silent = false } = {}) => {
     setState((prev) => (prev ? { ...prev, settings: { ...prev.settings, ...patch } } : prev))
-    showToast('Configuración guardada')
+    if (!silent) showToast('Configuración guardada en este navegador')
   }
 
   const applyPreset = (presetId) => {
@@ -421,6 +421,7 @@ export function StoreProvider({ children }) {
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useStore() {
   return useContext(StoreContext)
 }

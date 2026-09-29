@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { hashPassword, roleLabel } from '../utils/auth.js'
-import { formatMoney, uid } from '../utils/format.js'
+import { formatMoney } from '../utils/format.js'
 
 export default function UsersView() {
   const { users, currentUser, addUser, updateUser, deleteUser } = useStore()

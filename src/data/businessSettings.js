@@ -1,4 +1,6 @@
-// (tail de businessPresets.js)
+// Ajustes por defecto + helpers de configuracion del negocio
+import { BUSINESS_PRESETS } from './businessPresets.js'
+
 export const ALL_MODULES = [
   { id: 'pos', label: 'Caja / Facturacion', icon: '🧾', required: true, hint: 'Siempre activo' },
   { id: 'inventario', label: 'Inventario', icon: '📦', hint: 'Productos y stock' },

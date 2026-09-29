@@ -40,7 +40,7 @@ export default function ReportsView() {
     const map = new Map()
     for (const s of filtered) {
       const d = new Date(s.date)
-      let key = ''
+      let key
       if (groupBy === 'dia') {
         key = fmtDate(d)
       } else if (groupBy === 'semana') {

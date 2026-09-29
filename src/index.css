@@ -2231,3 +2231,6 @@ button, .chip, .prod-card, .cart-item, .nav-item {
 .inline-form { display: flex; gap: 8px; }
 .inline-form .input { flex: 1; }
 .danger-zone { border: 2px solid var(--danger); }
+
+.autosave-note { margin: 12px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+

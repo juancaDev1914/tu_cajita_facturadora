@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react'
-import Modal from '../components/Modal.jsx'
+import { useState } from 'react'
 import { useStore } from '../context/StoreContext.jsx'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
 import { ALL_MODULES } from '../data/businessSettings.js'
@@ -8,6 +7,9 @@ import DangerZone from '../components/DangerZone.jsx'
 export default function SettingsView() {
   const { settings, updateSettings, applyPreset } = useStore()
   const [newPay, setNewPay] = useState('')
+
+  // Escribe sin toast: el autoguardado local (IndexedDB + localStorage) se encarga
+  const setField = (key, value) => updateSettings({ [key]: value }, { silent: true })
 
   const toggleModule = (id) => {
     if (id === 'pos') return
@@ -41,18 +43,22 @@ export default function SettingsView() {
         <h3>Datos del negocio (salen en el ticket)</h3>
         <div className="form-grid">
           <label>Nombre *
-            <input className="input" value={settings.businessName} onChange={(e) => updateSettings({ businessName: e.target.value })} />
+            <input className="input" value={settings.businessName} onChange={(e) => setField('businessName', e.target.value)} />
           </label>
           <label>Direccion
-            <input className="input" value={settings.address} onChange={(e) => updateSettings({ address: e.target.value })} />
+            <input className="input" value={settings.address} onChange={(e) => setField('address', e.target.value)} />
           </label>
           <label>Telefono
-            <input className="input" value={settings.phone} onChange={(e) => updateSettings({ phone: e.target.value })} />
+            <input className="input" value={settings.phone} onChange={(e) => setField('phone', e.target.value)} />
           </label>
           <label>Mensaje del ticket
-            <input className="input" value={settings.ticketFooter} onChange={(e) => updateSettings({ ticketFooter: e.target.value })} />
+            <input className="input" value={settings.ticketFooter} onChange={(e) => setField('ticketFooter', e.target.value)} />
           </label>
         </div>
+        <p className="autosave-note">
+          ✅ Los cambios se guardan solos en este navegador (IndexedDB + localStorage). Usa
+          “Descargar respaldo” en la Zona de peligro para pasarlos a otro equipo.
+        </p>
       </section>
 
       <section className="card">

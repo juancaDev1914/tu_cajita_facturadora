@@ -146,11 +146,12 @@ export default function POSView({ user }) {
             return (
               <button
                 key={p.id}
-                className={`prod-card ${out ? 'out' : ''}`}
+                className={`prod-card ${out ? 'out' : ''} ${inCart ? 'in-cart' : ''}`}
                 onClick={() => addToCart(p)}
                 disabled={out}
               >
                 <span className="prod-emoji">{p.emoji}</span>
+                {inCart > 0 && <span className="prod-badge">{inCart}</span>}
                 <span className="prod-name">{p.name}</span>
                 <span className="prod-price">{formatMoney(p.price)}</span>
                 <span className="prod-stock">
