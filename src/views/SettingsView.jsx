@@ -3,10 +3,22 @@ import { useStore } from '../context/StoreContext.jsx'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
 import { ALL_MODULES } from '../data/businessSettings.js'
 import DangerZone from '../components/DangerZone.jsx'
+import MoneyField from '../components/MoneyField.jsx'
+import { CURRENCIES, getCurrencyLabel } from '../utils/format.js'
+import { cashDrawerIdsOf } from '../utils/cash.js'
 
 export default function SettingsView() {
   const { settings, updateSettings, applyPreset } = useStore()
   const [newPay, setNewPay] = useState('')
+  // Medios de pago que suman al cajon fisico (configurable, con fallback a 'efectivo')
+  const drawerIds = cashDrawerIdsOf(settings)
+
+  const toggleDrawer = (id) => {
+    const next = drawerIds.includes(id)
+      ? drawerIds.filter((x) => x !== id)
+      : [...drawerIds, id]
+    updateSettings({ cashDrawerIds: next }, { silent: true })
+  }
 
   // Escribe sin toast: el autoguardado local (IndexedDB + localStorage) se encarga
   const setField = (key, value) => updateSettings({ [key]: value }, { silent: true })
@@ -58,6 +70,66 @@ export default function SettingsView() {
         <p className="autosave-note">
           ✅ Los cambios se guardan solos en este navegador (IndexedDB + localStorage). Usa
           “Descargar respaldo” en la Zona de peligro para pasarlos a otro equipo.
+        </p>
+      </section>
+
+      <section className="card">
+        <h3>💱 Moneda de toda la app</h3>
+        <div className="form-grid">
+          <label>Moneda
+            <select
+              className="input"
+              value={settings.currency || 'COP'}
+              onChange={(e) => setField('currency', e.target.value)}
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} · {c.label} ({c.symbol})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>Efectivo inicial sugerido al abrir caja
+            <MoneyField
+              value={settings.defaultOpeningCash}
+              onChange={(v) => setField('defaultOpeningCash', v)}
+              ariaLabel="Efectivo inicial sugerido"
+            />
+          </label>
+        </div>
+        <p className="autosave-note">
+          Los montos de toda la app (productos, ticket, reportes y caja) se muestran en{' '}
+          <b>{getCurrencyLabel()}</b>.
+        </p>
+      </section>
+
+      <section className="card">
+        <h3>💰 Caja (apertura y cierre)</h3>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={settings.requireOpenCash !== false}
+            onChange={(e) => setField('requireOpenCash', e.target.checked)}
+          />
+          Exigir caja abierta para poder cobrar
+        </label>
+        <span className="cash-label">Medios de pago cuyo dinero SÍ entra al cajón físico</span>
+        <div className="chip-row">
+          {(settings.paymentMethods || []).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`chip ${drawerIds.includes(m.id) ? 'active' : ''}`}
+              onClick={() => toggleDrawer(m.id)}
+              title="Cuenta para el arqueo de efectivo"
+            >
+              {drawerIds.includes(m.id) ? '✅' : '⬜'} {m.label}
+            </button>
+          ))}
+        </div>
+        <p className="autosave-note">
+          El arqueo compara el dinero contado contra: efectivo inicial + ventas de esos medios +
+          ingresos extra − retiros. Lo pagado con tarjeta o transferencia no debe estar en el cajón.
         </p>
       </section>
 

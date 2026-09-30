@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { saleNumberToString, uid } from '../utils/format.js'
+import { saleNumberToString, uid, formatMoney } from '../utils/format.js'
 import { hashPassword } from '../utils/auth.js'
 import { idbGet, idbSet } from '../db/db.js'
-import { DEFAULT_SETTINGS, settingsFromPreset } from '../data/businessSettings.js'
+import { DEFAULT_SETTINGS, settingsFromPreset, withCashModule } from '../data/businessSettings.js'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
+import { setCurrency } from '../utils/format.js'
+import { emptyCash, normalizeCash, cashSessionSummary } from '../utils/cash.js'
 
 const SESSION_KEY = 'cajita_pos_session'
 const BACKUP_KEY = 'cajita_pos_backup_v1'
@@ -18,13 +20,29 @@ function buildEmptyState(settings = DEFAULT_SETTINGS) {
     users: [],
     debts: [],
     payrolls: [],
+    cash: emptyCash(),
     settings: { ...DEFAULT_SETTINGS, ...settings },
   }
 }
 
+// Une settings guardados con los valores actuales (migraciones suaves:
+// moneda COP por defecto, medios de cajon y modulo de caja en installs viejas)
+function migrateSettings(raw) {
+  const settings = { ...DEFAULT_SETTINGS, ...(raw || {}) }
+  settings.modules = withCashModule(settings.modules)
+  if (!settings.currency) settings.currency = DEFAULT_SETTINGS.currency
+  if (!Array.isArray(settings.cashDrawerIds) || !settings.cashDrawerIds.length) {
+    settings.cashDrawerIds = [...DEFAULT_SETTINGS.cashDrawerIds]
+  }
+  if (typeof settings.requireOpenCash !== 'boolean') settings.requireOpenCash = true
+  if (typeof settings.defaultOpeningCash !== 'number') settings.defaultOpeningCash = 0
+  return settings
+}
+
 function normalizeState(data) {
-  const settings = { ...DEFAULT_SETTINGS, ...(data?.settings || {}) }
+  const settings = migrateSettings(data?.settings)
   return {
+    cash: normalizeCash(data?.cash),
     products: Array.isArray(data?.products) ? data.products : [],
     sales: Array.isArray(data?.sales) ? data.sales : [],
     users: Array.isArray(data?.users) ? data.users : [],
@@ -71,6 +89,11 @@ export function StoreProvider({ children }) {
   useEffect(() => {
     stateRef.current = state
   }, [state])
+
+  // La moneda elegida en Configuracion gobierna TODO el dinero de la app (COP por defecto)
+  useEffect(() => {
+    setCurrency(state?.settings?.currency)
+  }, [state?.settings?.currency])
 
   // Carga inicial 100% local: IndexedDB + respaldo localStorage
   useEffect(() => {
@@ -142,7 +165,8 @@ export function StoreProvider({ children }) {
     const d = new Date()
     const p = (x) => String(x).padStart(2, '0')
     const id = `V-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${saleNumberToString(invoiceNumber)}`
-    const sale = { ...saleDraft, id, number: invoiceNumber }
+    // Traza de caja: cada venta queda ligada a la sesion de caja abierta
+    const sale = { ...saleDraft, id, number: invoiceNumber, sessionId: s.cash?.open?.id || null }
     setState((prev) => {
       if (!prev) return prev
       const products = prev.products.map((prod) => {
@@ -176,6 +200,106 @@ export function StoreProvider({ children }) {
       return { ...prev, products, sales }
     })
     showToast('Venta anulada y stock restaurado', 'warning')
+  }
+
+  // ---------- Apertura y cierre de caja (sesión única de todo el negocio) ----------
+  const cashActor = () => {
+    const u = stateRef.current?.users.find((x) => x.id === userId) || null
+    return { name: u?.name || currentUser?.name || 'Sin sesión', id: u?.id || null }
+  }
+
+  // Abre la caja con el efectivo inicial (solo puede existir una sesión abierta)
+  const openCash = ({ openingCash = 0, note = '' } = {}) => {
+    const s = stateRef.current
+    if (!s) return { ok: false }
+    if (s.cash?.open) {
+      showToast('La caja ya está abierta', 'warning')
+      return { ok: false }
+    }
+    const actor = cashActor()
+    const session = {
+      id: uid(),
+      openedAt: new Date().toISOString(),
+      openedBy: actor.name,
+      openedById: actor.id,
+      openingCash: Math.max(0, Number(openingCash) || 0),
+      note: String(note || '').trim(),
+    }
+    setState((prev) =>
+      prev ? { ...prev, cash: { open: session, history: prev.cash?.history || [] } } : prev,
+    )
+    showToast(`Caja abierta con ${formatMoney(session.openingCash)}`)
+    return { ok: true, session }
+  }
+
+  // Cierra la caja: arqueo (dinero contado) + retiros/ingresos extra.
+  // El resumen queda congelado en el historial para poder consultarlo siempre.
+  const closeCash = ({ countedCash = 0, withdrawals = 0, otherIncome = 0, note = '' } = {}) => {
+    const s = stateRef.current
+    const session = s?.cash?.open
+    if (!s || !session) {
+      showToast('No hay caja abierta para cerrar', 'warning')
+      return { ok: false }
+    }
+    const actor = cashActor()
+    const closedAt = new Date().toISOString()
+    const withMovements = {
+      ...session,
+      withdrawals: Math.max(0, Number(withdrawals) || 0),
+      otherIncome: Math.max(0, Number(otherIncome) || 0),
+    }
+    const summary = cashSessionSummary({
+      sales: s.sales,
+      session: withMovements,
+      settings: s.settings,
+      until: closedAt,
+    })
+    const counted = Number(countedCash) || 0
+    const difference = Math.round((counted - summary.expectedCash) * 100) / 100
+    const closing = {
+      ...withMovements,
+      closedAt,
+      closedBy: actor.name,
+      closedById: actor.id,
+      note: String(note || '').trim() || session.note || '',
+      countedCash: counted,
+      difference,
+      summary,
+    }
+    setState((prev) =>
+      prev
+        ? { ...prev, cash: { open: null, history: [closing, ...(prev.cash?.history || [])] } }
+        : prev,
+    )
+    if (Math.abs(difference) < 0.01) showToast('Caja cuadrada · cierre registrado ✅')
+    else {
+      showToast(
+        `Caja cerrada · ${difference < 0 ? 'faltante' : 'sobrante'} de ${formatMoney(Math.abs(difference))}`,
+        'warning',
+      )
+    }
+    return { ok: true, closing, difference }
+  }
+
+  const deleteCashSession = (closingId) => {
+    const isAdmin = stateRef.current?.users.find((u) => u.id === userId)?.role === 'admin'
+    if (!isAdmin) {
+      showToast('Solo el administrador puede eliminar cierres de caja', 'warning')
+      return
+    }
+    setState((prev) =>
+      prev
+        ? {
+            ...prev,
+            cash: {
+              ...emptyCash(),
+              ...(prev.cash || {}),
+              history: (prev.cash?.history || []).filter((h) => h.id !== closingId),
+            },
+          }
+        : prev,
+    )
+    showToast('Cierre de caja eliminado', 'warning')
   }
 
   // ---------- Productos (solo local: navegador) ----------
@@ -290,7 +414,7 @@ export function StoreProvider({ children }) {
       commissionPct: 0,
       createdAt: new Date().toISOString(),
     }
-    setState({ ...base, settings, users: [admin], products: [], sales: [], nextInvoice: 1, debts: [], payrolls: [] })
+    setState({ ...base, settings, users: [admin], products: [], sales: [], nextInvoice: 1, debts: [], payrolls: [], cash: emptyCash() })
     setUserId(admin.id)
     try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
     const preset = BUSINESS_PRESETS[businessType]
@@ -325,6 +449,7 @@ export function StoreProvider({ children }) {
         nextInvoice: 1,
         debts: [],
         payrolls: [],
+        cash: emptyCash(),
         users: keepUsers ? prev.users : [],
       }
     })
@@ -382,6 +507,10 @@ export function StoreProvider({ children }) {
       users: state?.users || [],
       debts: state?.debts || [],
       payrolls: state?.payrolls || [],
+      cash: state?.cash || emptyCash(),
+      cashOpen: !!state?.cash?.open,
+      // Si la caja debe estar abierta para poder cobrar (Configuración)
+      requireOpenCash: state?.settings?.requireOpenCash !== false,
       settings: state?.settings || { ...DEFAULT_SETTINGS },
       needsSetup: !!state && (!state.settings?.setupCompleted || !state.users.length),
       currentUser,
@@ -413,6 +542,9 @@ export function StoreProvider({ children }) {
       deleteDebt,
       recordPayroll,
       removePayroll,
+      openCash,
+      closeCash,
+      deleteCashSession,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state, toast, currentUser, isOnline],

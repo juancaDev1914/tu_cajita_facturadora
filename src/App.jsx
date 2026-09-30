@@ -10,6 +10,7 @@ import useBackGuard from './hooks/useBackGuard.js'
 
 // Lazy loading de vistas para reducir el bundle inicial
 const POSView = lazy(() => import('./views/POSView.jsx'))
+const CashView = lazy(() => import('./views/CashView.jsx'))
 const InventoryView = lazy(() => import('./views/InventoryView.jsx'))
 const SalesView = lazy(() => import('./views/SalesView.jsx'))
 const ReportsView = lazy(() => import('./views/ReportsView.jsx'))
@@ -21,6 +22,7 @@ const SettingsView = lazy(() => import('./views/SettingsView.jsx'))
 
 const VIEW_TITLES = {
   pos: 'Caja / Facturación',
+  caja: 'Apertura y cierre de caja',
   inventario: 'Inventario',
   historial: 'Historial de ventas',
   reportes: 'Reportes',
@@ -31,8 +33,8 @@ const VIEW_TITLES = {
   configuracion: 'Configuración',
 }
 
-const ALL_ADMIN_VIEWS = ['pos', 'inventario', 'historial', 'reportes', 'dashboard', 'deudas', 'nomina', 'usuarios', 'configuracion']
-const VENDOR_VIEWS = ['pos', 'historial']
+const ALL_ADMIN_VIEWS = ['pos', 'caja', 'inventario', 'historial', 'reportes', 'dashboard', 'deudas', 'nomina', 'usuarios', 'configuracion']
+const VENDOR_BASE_VIEWS = ['pos', 'historial']
 
 function LoadingScreen() {
   const { settings } = useStore()
@@ -55,7 +57,7 @@ function ViewLoader() {
 }
 
 function Shell() {
-  const { currentUser, ready, needsSetup, settings, isOnline, toast, dismissToast, logout } = useStore()
+  const { currentUser, ready, needsSetup, settings, cash, isOnline, toast, dismissToast, logout } = useStore()
   const [view, setView] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('view')
     return fromUrl && VIEW_TITLES[fromUrl] ? fromUrl : 'pos'
@@ -65,7 +67,15 @@ function Shell() {
   // Vistas permitidas = rol × módulos activos en configuración
   const modules = settings?.modules || ALL_ADMIN_VIEWS
   const adminAllowed = ALL_ADMIN_VIEWS.filter((v) => v === 'configuracion' || modules.includes(v))
-  const allowed = currentUser?.role === 'admin' ? adminAllowed : VENDOR_VIEWS
+  // El vendedor accede a la caja solo si el módulo "Apertura y cierre" está activo
+  const vendorAllowed = modules.includes('caja')
+    ? [VENDOR_BASE_VIEWS[0], 'caja', ...VENDOR_BASE_VIEWS.slice(1)]
+    : VENDOR_BASE_VIEWS
+  // La caja solo merece lugar en la navegación si algo hay dentro: caja abierta o cierres guardados.
+  // (Se sigue pudiendo abrir/cerrar desde el POS; la entrada aparece en cuanto hay movimiento.)
+  const hasCashActivity = !!(cash?.open) || (cash?.history?.length || 0) > 0 || view === 'caja'
+  const allowed = (currentUser?.role === 'admin' ? adminAllowed : vendorAllowed)
+    .filter((v) => v !== 'caja' || hasCashActivity)
 
   useBackGuard(sidebarOpen, () => setSidebarOpen(false))
 
@@ -132,6 +142,7 @@ function Shell() {
           )}
           <Suspense fallback={<ViewLoader />}>
             {current === 'pos' && <POSView user={currentUser} />}
+            {current === 'caja' && <CashView />}
             {current === 'inventario' && <InventoryView />}
             {current === 'historial' && (
               <SalesView

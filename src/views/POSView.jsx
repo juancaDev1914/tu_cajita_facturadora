@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
+import CashBar from '../components/CashBar.jsx'
+import { OpenCashModal, CloseCashModal } from '../components/CashModals.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { haptic, TAP, SUCCESS } from '../utils/haptics.js'
 import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel } from '../utils/format.js'
@@ -7,9 +9,15 @@ import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel } from '../ut
 const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
 
 export default function POSView({ user }) {
-  const { products, addSale, showToast, isOnline, settings } = useStore()
+  const { products, addSale, showToast, isOnline, settings, cashOpen, requireOpenCash } =
+    useStore()
   const paymentMethods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
+  // Con requireOpenCash activo no se puede cobrar sin caja abierta (Configuración).
+  // Si el módulo de caja está desactivado, la barra y el bloqueo se ocultan.
+  const cashModuleOn = !Array.isArray(settings?.modules) || settings.modules.includes('caja')
+  const blockCheckout = cashModuleOn && requireOpenCash && !cashOpen
 
+  const [cashModal, setCashModal] = useState(null) // 'open' | 'close'
   const [cashier, setCashier] = useState(user?.name || 'Cajero 1')
   const [customer, setCustomer] = useState('')
   const [cart, setCart] = useState([])
@@ -90,6 +98,11 @@ export default function POSView({ user }) {
 
   const openPayment = () => {
     if (cart.length === 0) return
+    if (blockCheckout) {
+      showToast('Abre la caja antes de cobrar', 'warning')
+      setCashModal('open')
+      return
+    }
     setReceiveStr(String(total))
     setPaymentModal(true)
   }
@@ -123,6 +136,13 @@ export default function POSView({ user }) {
   return (
     <div className="pos-layout">
       <section className="pos-products">
+        {cashModuleOn && (
+          <CashBar
+            variant="inline"
+            onRequestOpen={() => setCashModal('open')}
+            onRequestClose={() => setCashModal('close')}
+          />
+        )}
         <div className="pos-topbar">
           <input
             className="input search-input"
@@ -286,9 +306,15 @@ export default function POSView({ user }) {
                 🗑️ Vaciar
               </button>
               <button className="btn-primary btn-charge" onClick={openPayment}>
-                💰 Cobrar {formatMoney(total)}
+                {blockCheckout ? '🔒 Abrir caja para cobrar' : `💰 Cobrar ${formatMoney(total)}`}
               </button>
             </div>
+
+            {blockCheckout && (
+              <button className="cash-lock-note" onClick={() => setCashModal('open')}>
+                💳 La caja está cerrada: ábrela para registrar ventas y cuadrar el efectivo
+              </button>
+            )}
           </div>
         )}
 
@@ -298,6 +324,9 @@ export default function POSView({ user }) {
           </div>
         )}
       </section>
+
+      {cashModal === 'open' && <OpenCashModal onClose={() => setCashModal(null)} />}
+      {cashModal === 'close' && <CloseCashModal onClose={() => setCashModal(null)} />}
 
       {paymentModal && (
         <Modal

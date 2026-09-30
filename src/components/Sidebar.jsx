@@ -5,6 +5,7 @@ import { haptic } from '../utils/haptics.js'
 
 const NAV = [
   { id: 'pos', label: 'Caja / Facturación', icon: '🧾' },
+  { id: 'caja', label: 'Apertura y cierre', icon: '💰' },
   { id: 'inventario', label: 'Inventario', icon: '📦' },
   { id: 'historial', label: 'Historial de ventas', icon: '🕓' },
   { id: 'reportes', label: 'Reportes', icon: '📊' },

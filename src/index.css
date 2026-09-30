@@ -2234,3 +2234,188 @@ button, .chip, .prod-card, .cart-item, .nav-item {
 
 .autosave-note { margin: 12px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 
+/* ============================================================
+   APERTURA Y CIERRE DE CAJA
+   ============================================================ */
+
+/* ---------- Campo de dinero (MoneyField) ---------- */
+.money-field {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.money-field:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.money-prefix {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+}
+.money-field input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 11px 12px;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: right;
+  color: var(--text);
+}
+.money-field.disabled { opacity: 0.6; }
+
+/* ---------- Barra de estado de la caja ---------- */
+.cash-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  margin-bottom: 12px;
+}
+.cash-bar.open { background: var(--success-soft); border-color: #86efac; }
+.cash-bar.closed { background: var(--warning-soft); border-color: #fde68a; }
+.cash-status { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cash-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.cash-dot.on { background: var(--success); box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.18); }
+.cash-dot.off { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18); }
+.cash-status-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.cash-status-text strong { font-size: 14px; color: var(--text); }
+.cash-status-text small { font-size: 11px; color: var(--muted); }
+.cash-figures { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.cash-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 96px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.cash-figure small {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+.cash-figure b { font-size: 14px; color: var(--text); white-space: nowrap; }
+.cash-figure.drawer b { color: var(--success); }
+.cash-figure.expected b { color: var(--primary-dark); }
+.cash-actions { display: flex; gap: 8px; }
+/* Versión compacta: cabecera del punto de venta */
+.cash-bar.inline { padding: 8px 10px; margin-bottom: 8px; }
+.cash-bar.inline .cash-figure { min-width: 80px; padding: 2px 8px; }
+.cash-bar.inline .cash-figure b { font-size: 13px; }
+.pos-products > .cash-bar { flex-shrink: 0; }
+
+/* ---------- Detalle de caja (campos, desglose, filas) ---------- */
+.cash-view { display: flex; flex-direction: column; gap: 4px; }
+.cash-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.cash-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+.cash-help { font-size: 12.5px; line-height: 1.5; margin: 0 0 12px; }
+.cash-quick { margin-bottom: 12px; }
+.cash-quick .chip { cursor: pointer; }
+.cash-movements { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.cash-session-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.cash-split { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 4px; }
+.cash-methods,
+.cash-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.cash-mini { margin-top: 12px; }
+.cash-method {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.cash-method:first-of-type { border-top: none; padding-top: 0; }
+.cash-method em { display: block; font-style: normal; font-size: 11px; color: var(--muted); }
+.cash-method strong { white-space: nowrap; text-align: right; }
+.cash-method strong small { font-weight: 500; font-size: 11px; color: var(--muted); }
+.cash-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.cash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.cash-row > span:last-child,
+.cash-row strong { color: var(--text); white-space: nowrap; }
+.cash-row.minus > span:last-child { color: var(--danger); }
+.cash-row.total {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 2px;
+}
+.cash-row.total span,
+.cash-row.total strong { font-size: 14px; font-weight: 800; color: var(--text); }
+.cash-row.diff { border-top: 1px dashed var(--border); padding-top: 8px; }
+.cash-row.diff.ok strong { color: var(--success); }
+.cash-row.diff.neg strong { color: var(--danger); }
+.cash-row.diff.pos strong { color: var(--warning); }
+.cash-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cash-view .panel-head { margin-bottom: 8px; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (min-width: 640px) { .cash-movements { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 768px) { .cash-split { grid-template-columns: 1fr 1fr; } }
+.cash-lock-note {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px dashed #fbbf24;
+  border-radius: 10px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+

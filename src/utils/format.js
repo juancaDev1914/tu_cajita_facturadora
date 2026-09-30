@@ -1,8 +1,43 @@
 // ===== Configuración global (moneda, formato) =====
-// NOTA: nombre/dirección/teléfono/pagos del negocio viven en settings (StoreContext),
-// no aquí. Esto solo es formato de moneda.
-export const CURRENCY_CODE = 'COP'
+// NOTA: nombre/dirección/teléfono/pagos y MONEDA del negocio viven en settings
+// (StoreContext). La moneda se sincroniza aquí con setCurrency() desde
+// StoreContext, para que TODO el dinero de la app salga en la divisa elegida
+// (por defecto COP: peso colombiano de Colombia) sin pasarla en cada llamada.
+
+export const DEFAULT_CURRENCY = 'COP'
+export const CURRENCY_CODE = DEFAULT_CURRENCY // retro-compatibilidad
 export const LOCALE = 'es-CO'
+
+// Monedas disponibles (la primera es la predeterminada: COP)
+export const CURRENCIES = [
+  { code: 'COP', label: 'Peso colombiano', symbol: '$', locale: 'es-CO', decimals: 0 },
+  { code: 'USD', label: 'Dólar', symbol: 'US$', locale: 'es-CO', decimals: 2 },
+  { code: 'EUR', label: 'Euro', symbol: '€', locale: 'es-CO', decimals: 2 },
+  { code: 'MXN', label: 'Peso mexicano', symbol: 'MX$', locale: 'es-CO', decimals: 0 },
+  { code: 'ARS', label: 'Peso argentino', symbol: 'AR$', locale: 'es-CO', decimals: 0 },
+  { code: 'CLP', label: 'Peso chileno', symbol: 'CL$', locale: 'es-CO', decimals: 0 },
+  { code: 'PEN', label: 'Sol peruano', symbol: 'S/', locale: 'es-CO', decimals: 2 },
+  { code: 'BRL', label: 'Real brasileño', symbol: 'R$', locale: 'es-CO', decimals: 2 },
+]
+
+let activeCurrency = DEFAULT_CURRENCY
+
+// StoreContext la llama cada vez que cambian settings.currency
+export function setCurrency(code) {
+  activeCurrency = CURRENCIES.some((c) => c.code === code) ? code : DEFAULT_CURRENCY
+  return activeCurrency
+}
+
+export const getCurrency = () => activeCurrency
+
+export function currencyMeta(code = activeCurrency) {
+  return CURRENCIES.find((c) => c.code === code) || CURRENCIES[0]
+}
+
+export const getCurrencySymbol = () => currencyMeta().symbol
+export const getCurrencyDecimals = () => currencyMeta().decimals
+// Para etiquetas de campos: "COP $"
+export const getCurrencyLabel = () => `${activeCurrency} ${currencyMeta().symbol}`
 
 // Fallback si settings aún no cargan
 export const FALLBACK_PAYMENTS = [
@@ -17,25 +52,69 @@ export const paymentLabel = (id, methods = FALLBACK_PAYMENTS) =>
 
 // ---------- Dinero ----------
 export function formatMoney(n, { compact = false } = {}) {
+  const meta = currencyMeta()
   const safe = Number.isFinite(Number(n)) ? Number(n) : 0
   const value = Number.isNaN(safe) ? 0 : safe
   if (compact) {
     if (Math.abs(value) >= 1_000_000) {
-      return `$${(value / 1_000_000).toLocaleString(LOCALE, { maximumFractionDigits: 1 })}M`
+      return `${meta.symbol}${(value / 1_000_000).toLocaleString(meta.locale, { maximumFractionDigits: 1 })}M`
     }
     if (Math.abs(value) >= 1_000) {
-      return `$${(value / 1_000).toLocaleString(LOCALE, { maximumFractionDigits: 1 })}k`
+      return `${meta.symbol}${(value / 1_000).toLocaleString(meta.locale, { maximumFractionDigits: 1 })}k`
     }
   }
-  return new Intl.NumberFormat(LOCALE, {
+  return new Intl.NumberFormat(meta.locale, {
     style: 'currency',
-    currency: CURRENCY_CODE,
-    maximumFractionDigits: 0,
+    currency: meta.code,
+    minimumFractionDigits: meta.decimals,
+    maximumFractionDigits: meta.decimals,
   }).format(value)
 }
 
 export function compactMoney(n) {
   return formatMoney(n, { compact: true })
+}
+
+// 1.500.000 / $1.500.000 / "1,500,000.50" / "4.500" -> number (acepta ambos formatos de miles)
+export function parseAmount(input) {
+  if (typeof input === 'number') return Number.isFinite(input) ? input : 0
+  const raw = String(input ?? '').trim()
+  if (!raw) return 0
+  let s = raw.replace(/[^0-9.,-]/g, '')
+  if (!s) return 0
+  const negative = s.startsWith('-')
+  s = s.replace(/-/g, '')
+  const lastComma = s.lastIndexOf(',')
+  const lastDot = s.lastIndexOf('.')
+  if (lastComma !== -1 && lastDot !== -1) {
+    // El último separador es el decimal: 1.500,50 | 1,500.50
+    const decSep = lastComma > lastDot ? ',' : '.'
+    const thouSep = decSep === ',' ? '.' : ','
+    const [head, tail = ''] = s.split(decSep)
+    s = head.split(thouSep).join('') + '.' + tail
+  } else if (lastComma !== -1 || lastDot !== -1) {
+    const sep = lastComma !== -1 ? ',' : '.'
+    const parts = s.split(sep)
+    // "1.500.000" son miles; "1500.50" es decimal
+    const isGrouping =
+      parts.length > 1 &&
+      parts[parts.length - 1].length === 3 &&
+      parts.slice(1, -1).every((p) => p.length === 3)
+    s = isGrouping ? parts.join('') : `${parts[0]}.${parts.slice(1).join('')}`
+  }
+  const n = Number(s)
+  if (!Number.isFinite(n)) return 0
+  return negative ? -n : n
+}
+
+// Solo dígitos agrupados con separador de miles, sin símbolo: 1500000 -> 1.500.000
+export function groupMoney(n) {
+  const meta = currencyMeta()
+  const value = Number.isFinite(Number(n)) ? Number(n) : 0
+  return new Intl.NumberFormat(meta.locale, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: meta.decimals,
+  }).format(value)
 }
 
 // ---------- Fechas ----------
