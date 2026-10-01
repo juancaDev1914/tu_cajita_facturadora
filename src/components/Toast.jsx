@@ -1,23 +1,23 @@
 import { useEffect, useRef } from 'react'
-
-// Tiempo que la notificación permanece visible antes de ocultarse sola
-const AUTO_DISMISS_MS = 5000
+import { TOAST_MS } from '../utils/toast.js'
 
 export default function Toast({ toast, onClose }) {
   const onCloseRef = useRef(onClose)
   const toastId = toast?.id ?? null
+  // Cada notificación puede traer su propia duración (el cambio a devolver, más larga)
+  const duration = toast?.duration || TOAST_MS
 
   // Mantiene la referencia actualizada sin reiniciar el temporizador
   useEffect(() => {
     onCloseRef.current = onClose
   }, [onClose])
 
-  // Oculta la notificación 5 segundos después de mostrarse (o antes si se toca)
+  // Oculta la notificación cuando se cumple su duración (o antes si se toca)
   useEffect(() => {
     if (toastId === null) return undefined
-    const timer = setTimeout(() => onCloseRef.current?.(), AUTO_DISMISS_MS)
+    const timer = setTimeout(() => onCloseRef.current?.(), duration)
     return () => clearTimeout(timer)
-  }, [toastId])
+  }, [toastId, duration])
 
   if (!toast) return null
 

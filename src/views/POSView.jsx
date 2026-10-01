@@ -2,14 +2,18 @@ import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
 import CashBar from '../components/CashBar.jsx'
 import { OpenCashModal, CloseCashModal } from '../components/CashModals.jsx'
+import ConfirmPaymentModal from '../components/ConfirmPaymentModal.jsx'
+import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
+import { QtyStepper } from '../components/QtyInput.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { haptic, TAP, SUCCESS } from '../utils/haptics.js'
 import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel } from '../utils/format.js'
+import { TOAST_LONG_MS } from '../utils/toast.js'
 
 const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
 
 export default function POSView({ user }) {
-  const { products, addSale, showToast, isOnline, settings, cashOpen, requireOpenCash } =
+  const { products, sales, addSale, cancelPendingSale, showToast, isOnline, settings, cashOpen, requireOpenCash } =
     useStore()
   const paymentMethods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
   // Con requireOpenCash activo no se puede cobrar sin caja abierta (Configuración).
@@ -29,6 +33,17 @@ export default function POSView({ user }) {
   const [receiveStr, setReceiveStr] = useState('')
   const [receipt, setReceipt] = useState(null)
   const [expandedCart, setExpandedCart] = useState(false)
+  // Ventas dejadas pendientes de pago (la FE se emite al confirmar el cobro)
+  const [pendingOpen, setPendingOpen] = useState(false)
+  const [confirmPay, setConfirmPay] = useState(null)
+  const [cancelTarget, setCancelTarget] = useState(null)
+  // Edición de productos de una factura pendiente (agregar/quitar antes de cobrar)
+  const [editTarget, setEditTarget] = useState(null)
+
+  const pendingSales = useMemo(
+    () => sales.filter((s) => s.status === 'pendiente').sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [sales],
+  )
 
   const categories = useMemo(() => ['Todos', ...Array.from(new Set(products.map((p) => p.category)))], [products])
   const filtered = useMemo(
@@ -62,20 +77,18 @@ export default function POSView({ user }) {
       if (existing) return prev.map((i) => (i.productId === prod.id ? { ...i, qty: i.qty + 1 } : i))
       return [
         ...prev,
-        { productId: prod.id, name: prod.name, code: prod.code, emoji: prod.emoji, price: prod.price, qty: 1 },
+        // Se congela el costo: permite calcular la ganancia de esta venta
+        // aunque después se edite el costo del producto en el inventario.
+        { productId: prod.id, name: prod.name, code: prod.code, emoji: prod.emoji, price: prod.price, cost: prod.cost, qty: 1 },
       ]
     })
   }
 
-  const changeQty = (id, delta) => {
+  // Fija la cantidad a mano (teclado numérico): siempre entre 1 y el stock
+  const setQty = (id, qty) => {
+    const value = Math.floor(Number(qty) || 1)
     setCart((prev) =>
-      prev
-        .map((i) => {
-          if (i.productId !== id) return i
-          const qty = Math.min(Math.max(1, i.qty + delta), stockOf(id))
-          return { ...i, qty }
-        })
-        .filter((i) => i.qty > 0),
+      prev.map((i) => (i.productId === id ? { ...i, qty: Math.min(Math.max(1, value), stockOf(id)) } : i)),
     )
   }
 
@@ -96,6 +109,11 @@ export default function POSView({ user }) {
   const discountAmt = Math.round((subtotal * (Number(discountPct) || 0)) / 100)
   const total = subtotal - discountAmt
 
+  // Items de la venta: congelan el costo actual del producto para que la
+  // ganancia de esta factura no cambie si luego se edita el inventario.
+  const saleItems = () =>
+    cart.map((i) => ({ productId: i.productId, name: i.name, code: i.code, price: i.price, cost: i.cost, qty: i.qty }))
+
   const openPayment = () => {
     if (cart.length === 0) return
     if (blockCheckout) {
@@ -114,7 +132,7 @@ export default function POSView({ user }) {
       date: new Date().toISOString(),
       cashier: cashier.trim() || 'Cajero',
       customer: customer.trim(),
-      items: cart.map((i) => ({ productId: i.productId, name: i.name, code: i.code, price: i.price, qty: i.qty })),
+      items: saleItems(),
       subtotal,
       discountPct: Number(discountPct) || 0,
       total,
@@ -127,7 +145,35 @@ export default function POSView({ user }) {
     setReceipt(sale)
     clearCart()
     haptic(SUCCESS)
-    showToast('Venta registrada · ' + formatMoney(total))
+    // El cambio a devolver se anuncia con una notificación más larga (se lee mejor)
+    if (isCashMethod(paymentMethod) && change > 0) {
+      showToast(`Cambio a devolver: ${formatMoney(change)} · Venta ${formatMoney(total)}`, 'success', TOAST_LONG_MS)
+    } else {
+      showToast('Venta registrada · ' + formatMoney(total))
+    }
+  }
+
+  // Deja la venta PENDIENTE de pago: se reserva el stock y el N° de factura,
+  // pero la factura electrónica se emite recién cuando se confirme el cobro.
+  const holdSale = () => {
+    const sale = addSale({
+      date: new Date().toISOString(),
+      cashier: cashier.trim() || 'Cajero',
+      customer: customer.trim(),
+      items: saleItems(),
+      subtotal,
+      discountPct: Number(discountPct) || 0,
+      total,
+      paymentMethod: null,
+      received: null,
+      change: null,
+      status: 'pendiente',
+    })
+    setPaymentModal(false)
+    setReceipt(sale)
+    clearCart()
+    haptic(SUCCESS)
+    showToast('Venta pendiente · la factura electrónica sale al confirmar el pago', 'warning')
   }
 
   const receivedNum = () => Number(receiveStr) || 0
@@ -192,17 +238,26 @@ export default function POSView({ user }) {
             <h3>🛒 Carrito</h3>
             {totalItems > 0 && <span className="cart-count">{totalItems}</span>}
           </div>
-          {cart.length > 0 && (
+          <div className="cart-head-actions">
+            {cart.length > 0 && (
+              <button
+                className="btn-icon cart-expand"
+                onClick={() => setExpandedCart(!expandedCart)}
+                title={expandedCart ? 'Contraer carrito' : 'Expandir carrito'}
+                aria-label={expandedCart ? 'Contraer carrito' : 'Expandir carrito'}
+                aria-expanded={expandedCart}
+              >
+                {expandedCart ? '▼' : '▲'}
+              </button>
+            )}
             <button
-              className="btn-icon cart-expand"
-              onClick={() => setExpandedCart(!expandedCart)}
-              title={expandedCart ? 'Contraer carrito' : 'Expandir carrito'}
-              aria-label={expandedCart ? 'Contraer carrito' : 'Expandir carrito'}
-              aria-expanded={expandedCart}
+              className="btn-ghost btn-sm pending-toggle"
+              onClick={() => setPendingOpen(true)}
+              title="Facturas pendientes de pago"
             >
-              {expandedCart ? '▼' : '▲'}
+              ⏳ Pendientes{pendingSales.length > 0 ? ` (${pendingSales.length})` : ''}
             </button>
-          )}
+          </div>
         </div>
 
         {/* Info de cajero y cliente */}
@@ -235,23 +290,12 @@ export default function POSView({ user }) {
                 <span className="ci-price">{formatMoney(item.price)} c/u</span>
               </div>
               <div className="ci-actions">
-                <div className="ci-qty">
-                  <button
-                    className="qty-btn"
-                    onClick={() => changeQty(item.productId, -1)}
-                    aria-label="Reducir cantidad"
-                  >
-                    −
-                  </button>
-                  <span className="qty-num">{item.qty}</span>
-                  <button
-                    className="qty-btn"
-                    onClick={() => changeQty(item.productId, 1)}
-                    aria-label="Aumentar cantidad"
-                  >
-                    +
-                  </button>
-                </div>
+                <QtyStepper
+                  value={item.qty}
+                  max={stockOf(item.productId)}
+                  ariaLabel={`Cantidad de ${item.name}`}
+                  onChange={(n) => setQty(item.productId, n)}
+                />
                 <button
                   className="btn-remove-item"
                   onClick={() => removeItem(item.productId)}
@@ -336,6 +380,7 @@ export default function POSView({ user }) {
           footer={
             <>
               <button className="btn-ghost" onClick={() => setPaymentModal(false)}>Cancelar</button>
+              <button className="btn-hold" onClick={holdSale}>⏸ Dejar pendiente</button>
               <button
                 className="btn-primary"
                 disabled={isCashMethod(paymentMethod) && receivedNum() < total - 1}
@@ -382,12 +427,16 @@ export default function POSView({ user }) {
               </div>
             </div>
           )}
+          <p className="pay-note">
+            ✅ <strong>Confirmar venta</strong> emite la factura electrónica ahora · ⏸ <strong>Dejar pendiente</strong> guarda la
+            venta y la FE se emite al cobrar
+          </p>
         </Modal>
       )}
 
       {receipt && (
         <Modal
-          title="🧾 Venta registrada"
+          title={receipt.status === 'pendiente' ? '⏳ Venta pendiente de pago' : '🧾 Venta registrada'}
           onClose={() => setReceipt(null)}
           size="sm"
           footer={
@@ -424,7 +473,13 @@ export default function POSView({ user }) {
                 <span>Descuento {receipt.discountPct}%: −{formatMoney(Math.round((receipt.subtotal * receipt.discountPct) / 100))}</span>
               )}
               <strong>TOTAL: {formatMoney(receipt.total)}</strong>
-              <span>Pago: {paymentLabel(receipt.paymentMethod, paymentMethods)}</span>
+              <span>
+                Pago:{' '}
+                {receipt.status === 'pendiente'
+                  ? '⏳ Pendiente de pago'
+                  : paymentLabel(receipt.paymentMethod, paymentMethods)}
+              </span>
+              {receipt.eInvoice && <span>FE: {receipt.eInvoice.number}</span>}
               {isCashMethod(receipt.paymentMethod) && (
                 <>
                   <span>Recibido: {formatMoney(receipt.received)}</span>
@@ -434,6 +489,101 @@ export default function POSView({ user }) {
             </div>
             <div className="r-foot">{settings?.ticketFooter || 'Gracias por su compra!'}</div>
           </div>
+          {receipt.status === 'pendiente' && (
+            <p className="pay-note warn">
+              ⏳ Aún <strong>no</strong> hay factura electrónica: se emitirá al confirmar el pago desde el POS (⏳ Pendientes) o
+              desde el Historial de ventas.
+            </p>
+          )}
+        </Modal>
+      )}
+
+      {pendingOpen && (
+        <Modal
+          title={`⏳ Facturas pendientes (${pendingSales.length})`}
+          onClose={() => setPendingOpen(false)}
+          size="md"
+          footer={<button className="btn-ghost" onClick={() => setPendingOpen(false)}>Cerrar</button>}
+        >
+          <div className="pending-list">
+            {pendingSales.length === 0 && <p className="empty">No hay facturas pendientes 🎉</p>}
+            {pendingSales.map((s) => (
+              <div key={s.id} className="pending-row">
+                <div className="pr-info">
+                  <strong>
+                    Factura {saleNumber(s.number)} · {formatMoney(s.total)}
+                  </strong>
+                  <span>
+                    {fmtDateTime(new Date(s.date))} · {s.customer || 'Sin cliente'} · {s.cashier}
+                  </span>
+                </div>
+                <div className="pr-actions">
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => {
+                      setPendingOpen(false)
+                      setEditTarget(s)
+                    }}
+                  >
+                    ✏️ Editar
+                  </button>
+                  <button
+                    className="btn-primary btn-sm"
+                    onClick={() => {
+                      setPendingOpen(false)
+                      setConfirmPay(s)
+                    }}
+                  >
+                    💳 Cobrar
+                  </button>
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => {
+                      setPendingOpen(false)
+                      setCancelTarget(s)
+                    }}
+                  >
+                    ✖️ Cancelar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="pay-note">Al confirmar el cobro se emite la factura electrónica de inmediato.</p>
+        </Modal>
+      )}
+
+      {confirmPay && <ConfirmPaymentModal sale={confirmPay} onClose={() => setConfirmPay(null)} />}
+
+      {editTarget && (
+        <EditPendingSaleModal sale={editTarget} onClose={() => setEditTarget(null)} />
+      )}
+
+      {cancelTarget && (
+        <Modal
+          title="✖️ Cancelar factura pendiente"
+          onClose={() => setCancelTarget(null)}
+          size="sm"
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => setCancelTarget(null)}>Volver</button>
+              <button
+                className="btn-danger"
+                onClick={() => {
+                  cancelPendingSale(cancelTarget.id)
+                  setCancelTarget(null)
+                }}
+              >
+                Sí, cancelar
+              </button>
+            </>
+          }
+        >
+          <p>
+            ¿Cancelar la factura <strong>N° {saleNumber(cancelTarget.number)}</strong> por{' '}
+            <strong>{formatMoney(cancelTarget.total)}</strong>?
+          </p>
+          <p className="muted">Los productos vuelven al inventario y no se emite factura electrónica.</p>
         </Modal>
       )}
     </div>

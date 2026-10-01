@@ -2,13 +2,19 @@ import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDate } from '../utils/format.js'
+import { debtPaid, debtRemaining, debtProgress } from '../utils/debts.js'
 
 export default function DebtView() {
-  const { debts, addDebt, updateDebt, deleteDebt } = useStore()
+  const { debts, addDebt, updateDebt, deleteDebt, addDebtPayment, removeDebtPayment } = useStore()
   const [tab, setTab] = useState('todas')
   const [form, setForm] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [formError, setFormError] = useState('')
+  // Abono parcial sobre una deuda: { debtId, amount, date, note }
+  const [payment, setPayment] = useState(null)
+  const [payError, setPayError] = useState('')
+
+  const paymentDebt = payment ? debts.find((d) => d.id === payment.debtId) || null : null
 
   const filtered = useMemo(
     () =>
@@ -24,13 +30,15 @@ export default function DebtView() {
   const totals = useMemo(() => {
     const t = { porPagar: 0, porPagarPagado: 0, porCobrar: 0, porCobrarCobrado: 0 }
     for (const d of debts) {
-      const amt = Number(d.amount) || 0
+      // Lo pagado se reparte entre abonos + estado; lo que falta va al pendiente
+      const paid = debtPaid(d)
+      const rest = debtRemaining(d)
       if (d.type === 'pagar') {
-        if (d.status === 'pagada') t.porPagarPagado += amt
-        else t.porPagar += amt
+        t.porPagarPagado += paid
+        t.porPagar += rest
       } else {
-        if (d.status === 'pagada') t.porCobrarCobrado += amt
-        else t.porCobrar += amt
+        t.porCobrarCobrado += paid
+        t.porCobrar += rest
       }
     }
     return t
@@ -81,6 +89,36 @@ export default function DebtView() {
     updateDebt(d.id, { status: next })
   }
 
+  // ---------- Abonos ----------
+  const openPayment = (d) => {
+    setPayment({
+      debtId: d.id,
+      amount: String(debtRemaining(d)),
+      date: new Date().toISOString().slice(0, 10),
+      note: '',
+    })
+    setPayError('')
+  }
+
+  const payDebt = () => {
+    if (!payment || !paymentDebt) return
+    const value = Number(payment.amount)
+    if (!value || value <= 0) {
+      setPayError('Escribe un monto mayor a 0')
+      return
+    }
+    const date = payment.date
+      ? new Date(payment.date + 'T12:00:00').toISOString()
+      : new Date().toISOString()
+    const res = addDebtPayment(payment.debtId, { amount: value, date, note: payment.note })
+    if (res?.ok) {
+      setPayment(null)
+      setPayError('')
+    } else {
+      setPayError(res?.error || 'No se pudo registrar el abono')
+    }
+  }
+
   const typeLabel = (t) => (t === 'pagar' ? 'Por pagar' : 'Por cobrar')
 
   return (
@@ -122,6 +160,7 @@ export default function DebtView() {
             <th>Descripción</th>
             <th>Tipo</th>
             <th>Monto</th>
+            <th>Abonos</th>
             <th>Vence</th>
             <th>Estado</th>
             <th className="th-right">Acciones</th>
@@ -133,20 +172,40 @@ export default function DebtView() {
               <td><strong>{d.description}</strong></td>
               <td><span className={`badge ${d.type === 'pagar' ? 'danger' : 'neutral'}`}>{typeLabel(d.type)}</span></td>
               <td><strong>{formatMoney(d.amount)}</strong></td>
+              <td>
+                {debtPaid(d) > 0 ? (
+                  <>
+                    <div className="debt-progress" title={`${debtProgress(d)}% abonado`}>
+                      <i style={{ width: `${debtProgress(d)}%` }} />
+                    </div>
+                    <small className="muted">
+                      {formatMoney(debtPaid(d))} · {debtProgress(d)}%
+                    </small>
+                  </>
+                ) : (
+                  <small className="muted">Sin abonos</small>
+                )}
+              </td>
               <td>{d.dueDate ? fmtDate(new Date(d.dueDate + 'T00:00:00')) : '—'}</td>
               <td>
                 <button className={`badge ${d.status === 'pendiente' ? 'warn' : 'ok'}`} onClick={() => toggleStatus(d)} title="Cambiar estado">
                   {d.status === 'pendiente' ? 'Pendiente' : d.type === 'pagar' ? 'Pagada' : 'Cobrada'}
                 </button>
+                {debtRemaining(d) > 0 && (
+                  <small className="muted debt-rest">Falta {formatMoney(debtRemaining(d))}</small>
+                )}
               </td>
               <td className="td-right">
+                {debtRemaining(d) > 0 && (
+                  <button className="btn-ghost btn-sm" onClick={() => openPayment(d)}>💵 Abonar</button>
+                )}
                 <button className="btn-ghost btn-sm" onClick={() => { setForm(editForm(d)); setFormError('') }}>✏️</button>
                 <button className="btn-ghost btn-sm danger" onClick={() => setConfirmDelete(d)}>🗑️</button>
               </td>
             </tr>
           ))}
           {filtered.length === 0 && (
-            <tr><td colSpan="6" className="empty-cell">Sin registros. Agrega deudas del negocio o cuentas por cobrar.</td></tr>
+            <tr><td colSpan="7" className="empty-cell">Sin registros. Agrega deudas del negocio o cuentas por cobrar.</td></tr>
           )}
         </tbody>
       </table>
@@ -185,6 +244,94 @@ export default function DebtView() {
               Ya está pagada / cobrada
             </label>
           </form>
+        </Modal>
+      )}
+
+      {payment && paymentDebt && (
+        <Modal
+          title={`💵 Abono · ${paymentDebt.type === 'pagar' ? 'deuda del negocio' : 'cuenta por cobrar'}`}
+          onClose={() => setPayment(null)}
+          size="sm"
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => setPayment(null)}>Cancelar</button>
+              <button className="btn-primary" onClick={payDebt}>💵 Registrar abono</button>
+            </>
+          }
+        >
+          {payError && <div className="login-error">⚠️ {payError}</div>}
+
+          <div className="debt-pay-head">
+            <strong>{paymentDebt.description}</strong>
+            <span className="muted">
+              Total {formatMoney(paymentDebt.amount)} · abonado {formatMoney(debtPaid(paymentDebt))} · falta{' '}
+              {formatMoney(debtRemaining(paymentDebt))}
+            </span>
+            <div className="debt-progress">
+              <i style={{ width: `${debtProgress(paymentDebt)}%` }} />
+            </div>
+          </div>
+
+          <form className="form-grid" onSubmit={(e) => { e.preventDefault(); payDebt() }}>
+            <label>Monto del abono ($) *
+              <input
+                type="number"
+                min="1"
+                max={debtRemaining(paymentDebt)}
+                className="input"
+                value={payment.amount}
+                onChange={(e) => setPayment({ ...payment, amount: e.target.value })}
+                autoFocus
+              />
+            </label>
+            <label>Fecha
+              <input
+                type="date"
+                className="input"
+                value={payment.date}
+                onChange={(e) => setPayment({ ...payment, date: e.target.value })}
+              />
+            </label>
+            <label className="full-span">Nota (opcional)
+              <input
+                className="input"
+                placeholder="Ej. Abono en efectivo, pago por transferencia…"
+                value={payment.note}
+                onChange={(e) => setPayment({ ...payment, note: e.target.value })}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-ghost full-span"
+              onClick={() => setPayment({ ...payment, amount: String(debtRemaining(paymentDebt)) })}
+            >
+              💵 Abonar todo lo que falta ({formatMoney(debtRemaining(paymentDebt))})
+            </button>
+          </form>
+
+          {(paymentDebt.payments || []).length > 0 && (
+            <div className="debt-payments">
+              <span className="cash-label">Abonos registrados</span>
+              {paymentDebt.payments.map((p) => (
+                <div key={p.id} className="debt-pay-row">
+                  <span>
+                    <strong>{formatMoney(p.amount)}</strong>
+                    <small className="muted">
+                      {' '}· {fmtDate(new Date(p.date))}
+                      {p.note ? ` · ${p.note}` : ''}
+                    </small>
+                  </span>
+                  <button
+                    className="btn-icon"
+                    title="Quitar abono"
+                    onClick={() => removeDebtPayment(paymentDebt.id, p.id)}
+                  >
+                    🗑️
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
 

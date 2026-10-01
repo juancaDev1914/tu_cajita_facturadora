@@ -1,0 +1,102 @@
+import { useState } from 'react'
+import Modal from './Modal.jsx'
+import { useStore } from '../context/StoreContext.jsx'
+import { formatMoney, saleNumberToString, FALLBACK_PAYMENTS } from '../utils/format.js'
+
+// Mismos medios "de cajón" que el POS (efectivo / Nequi piden recibido y cambio)
+const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
+
+/**
+ * Confirma el pago de una venta PENDIENTE y, al hacerlo, emite la factura
+ * electrónica. Se usa desde el POS (lista de pendientes) y del Historial.
+ */
+export default function ConfirmPaymentModal({ sale, onClose }) {
+  const { confirmSalePayment, settings, cashOpen, requireOpenCash } = useStore()
+  const methods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
+  const cashModuleOn = !Array.isArray(settings?.modules) || settings.modules.includes('caja')
+
+  const [method, setMethod] = useState('efectivo')
+  const [receiveStr, setReceiveStr] = useState(String(sale?.total ?? ''))
+
+  if (!sale) return null
+
+  const total = Number(sale.total) || 0
+  const received = Number(receiveStr) || 0
+  const change = Math.max(0, received - total)
+  const cashMethod = isCashMethod(method)
+  const short = cashMethod && received < total
+  const cashClosed = cashModuleOn && requireOpenCash && !cashOpen
+
+  const confirm = () => {
+    if (short) return
+    const done = confirmSalePayment(sale.id, {
+      paymentMethod: method,
+      received: cashMethod ? received : total,
+    })
+    if (done) onClose?.()
+  }
+
+  return (
+    <Modal
+      title={`💳 Confirmar pago · ${saleNumberToString(sale.number)}`}
+      onClose={onClose}
+      size="sm"
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn-primary" disabled={short} onClick={confirm}>
+            🧾 Pagar y emitir FE
+          </button>
+        </>
+      }
+    >
+      <div className="pay-total">
+        <span>Total a pagar</span>
+        <strong>{formatMoney(total)}</strong>
+      </div>
+
+      <div className="pay-methods">
+        {methods.map((m) => (
+          <button
+            key={m.id}
+            className={`chip ${method === m.id ? 'active' : ''}`}
+            onClick={() => {
+              setMethod(m.id)
+              setReceiveStr(m.id === 'efectivo' ? String(total) : '')
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {cashMethod && (
+        <div className="pay-cash">
+          <label>Efectivo recibido</label>
+          <input
+            type="number"
+            inputMode="decimal"
+            className="input input-lg"
+            value={receiveStr}
+            onChange={(e) => setReceiveStr(e.target.value)}
+            autoFocus
+          />
+          <div className={`pay-change ${change < 0 ? 'bad' : ''}`}>
+            {change < 0 ? `Faltan ${formatMoney(Math.abs(change))}` : `Cambio a devolver: ${formatMoney(change)}`}
+          </div>
+        </div>
+      )}
+
+      <p className="pay-note">
+        🧾 Al confirmar el pago se emite la factura electrónica <strong>{`FE-${String(sale.number).padStart(6, '0')}`}</strong> de
+        inmediato.
+      </p>
+
+      {cashClosed && (
+        <p className="pay-note warn">
+          ⚠️ La caja está cerrada: este cobro no entrará al arqueo hasta que haya una sesión de caja abierta.
+        </p>
+      )}
+    </Modal>
+  )
+}

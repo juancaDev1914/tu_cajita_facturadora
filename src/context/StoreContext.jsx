@@ -6,6 +6,10 @@ import { DEFAULT_SETTINGS, settingsFromPreset, withCashModule } from '../data/bu
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
 import { setCurrency } from '../utils/format.js'
 import { emptyCash, normalizeCash, cashSessionSummary } from '../utils/cash.js'
+import { emitElectronicInvoice } from '../utils/einvoice.js'
+import { TOAST_LONG_MS } from '../utils/toast.js'
+import { debtRemaining } from '../utils/debts.js'
+import { isPeriodId } from '../utils/payroll.js'
 
 const SESSION_KEY = 'cajita_pos_session'
 const BACKUP_KEY = 'cajita_pos_backup_v1'
@@ -36,6 +40,7 @@ function migrateSettings(raw) {
   }
   if (typeof settings.requireOpenCash !== 'boolean') settings.requireOpenCash = true
   if (typeof settings.defaultOpeningCash !== 'number') settings.defaultOpeningCash = 0
+  if (!isPeriodId(settings.payrollPeriod)) settings.payrollPeriod = DEFAULT_SETTINGS.payrollPeriod
   return settings
 }
 
@@ -53,17 +58,21 @@ function normalizeState(data) {
   }
 }
 
+// Estado recién creado (sin configurar y sin datos): candidato a datos demo en desarrollo
+const isFreshState = (s) =>
+  !!s && !s.settings?.setupCompleted && !s.users.length && !s.products.length && !s.sales.length
+
 // Lee de IndexedDB, con respaldo en localStorage como segunda capa local
 async function loadFromStorage() {
   try {
     const stored = await idbGet('state')
-    if (stored) return normalizeState(stored)
+    if (stored) return withSalesGuard(stored)
   } catch {
     // IndexedDB no disponible -> probar localStorage
   }
   try {
     const raw = localStorage.getItem(BACKUP_KEY)
-    if (raw) return normalizeState(JSON.parse(raw))
+    if (raw) return withSalesGuard(JSON.parse(raw))
   } catch {
     // sin respaldo
   }
@@ -75,6 +84,55 @@ async function loadFromStorage() {
 
 function saveBackup(state) {
   try { localStorage.setItem(BACKUP_KEY, JSON.stringify(state)) } catch { /* ignore: cuota llena */ }
+}
+
+// ---------- Red de seguridad de las ventas ----------
+// El historial de ventas es lo más valioso del negocio y no se puede recuperar
+// si se borra el navegador. Guardamos una copialigera en localStorage con TODAS
+// las ventas; si al arrancar el estado principal viene sin ventas pero esta copia
+// si las tiene, se restauran (evita perderlas por un fallo de IndexedDB o por un
+// borrado accidental del almacenamiento).
+const SALES_KEY = 'cajita_pos_sales_guard'
+
+const salesGuardOf = (sales) => sales.map((s) => ({ ...s }))
+
+function saveSalesGuard(sales) {
+  try {
+    if (!Array.isArray(sales) || !sales.length) {
+      localStorage.removeItem(SALES_KEY)
+      return
+    }
+    localStorage.setItem(SALES_KEY, JSON.stringify(salesGuardOf(sales)))
+  } catch {
+    // Cuota llena: el respaldo de emergencia no cabe. No es crítico porque
+    // IndexedDB sigue siendo la fuente principal.
+  }
+}
+
+function readSalesGuard() {
+  try {
+    const raw = localStorage.getItem(SALES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+// Devuelve el estado con las ventas garantizadas: si el estado principal está
+// vacío pero la red de seguridad tiene ventas, se restauran.
+function withSalesGuard(data) {
+  const state = normalizeState(data)
+  if (state.sales.length) return state
+  const guarded = readSalesGuard()
+  if (!guarded.length) return state
+  const nextNumber = guarded.reduce((max, s) => Math.max(max, Number(s.number) || 0), 0)
+  return {
+    ...state,
+    sales: guarded,
+    nextInvoice: Math.max(Number(state.nextInvoice) || 1, nextNumber + 1),
+  }
 }
 
 export function StoreProvider({ children }) {
@@ -98,9 +156,21 @@ export function StoreProvider({ children }) {
   // Carga inicial 100% local: IndexedDB + respaldo localStorage
   useEffect(() => {
     let cancelled = false
-    loadFromStorage().then((data) => {
+    loadFromStorage().then(async (data) => {
+      let next = data
+      // SOLO DESARROLLO: primer arranque con la base vacía -> datos de prueba.
+      // import.meta.env.DEV es `false` en producción, así que Vite elimina este
+      // bloque (y el import dinámico de devSeed.js) del bundle final.
+      if (import.meta.env.DEV && isFreshState(data)) {
+        try {
+          const { applyDevSeed } = await import('../data/devSeed.js')
+          next = applyDevSeed(data, { replace: true })
+        } catch {
+          // Sin datos demo: la app sigue vacía y entra al asistente de setup
+        }
+      }
       if (cancelled) return
-      setState(data)
+      setState(next)
     })
     return () => {
       cancelled = true
@@ -113,6 +183,8 @@ export function StoreProvider({ children }) {
     const t = setTimeout(() => {
       idbSet('state', state).catch(() => {})
       saveBackup(state)
+      // Red de seguridad: copia de las ventas para no perderlas nunca
+      saveSalesGuard(state.sales)
     }, 250)
     return () => clearTimeout(t)
   }, [state])
@@ -129,7 +201,8 @@ export function StoreProvider({ children }) {
     }
   }, [])
 
-  const showToast = (message, type = 'success') => setToast({ message, type, id: Date.now() })
+  const showToast = (message, type = 'success', duration = null) =>
+    setToast({ message, type, id: Date.now(), duration })
   const dismissToast = () => setToast(null)
 
   // ---------- Sesión ----------
@@ -158,6 +231,10 @@ export function StoreProvider({ children }) {
   }
 
   // ---------- Ventas (solo local) ----------
+  // addSale maneja los 3 estados:
+  //  - 'completada' (cobrada ya)  -> se emite la factura electrónica AHORA
+  //  - 'pendiente'  (sin cobrar)  -> se emite la FE recién en confirmSalePayment()
+  // En ambos casos se descuenta stock y se reserva el N° de factura.
   const addSale = (saleDraft) => {
     const s = stateRef.current
     if (!s) return null
@@ -165,8 +242,19 @@ export function StoreProvider({ children }) {
     const d = new Date()
     const p = (x) => String(x).padStart(2, '0')
     const id = `V-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${saleNumberToString(invoiceNumber)}`
+    const status = saleDraft.status === 'pendiente' ? 'pendiente' : 'completada'
     // Traza de caja: cada venta queda ligada a la sesion de caja abierta
-    const sale = { ...saleDraft, id, number: invoiceNumber, sessionId: s.cash?.open?.id || null }
+    const sale = { ...saleDraft, id, number: invoiceNumber, sessionId: s.cash?.open?.id || null, status }
+    if (status === 'pendiente') {
+      sale.pendingSince = sale.pendingSince || new Date().toISOString()
+      sale.paymentMethod = null
+      sale.received = null
+      sale.change = null
+    } else {
+      sale.paidAt = sale.paidAt || new Date().toISOString()
+      // Pago confirmado -> factura electrónica
+      sale.eInvoice = emitElectronicInvoice(sale, s.settings)
+    }
     setState((prev) => {
       if (!prev) return prev
       const products = prev.products.map((prod) => {
@@ -176,6 +264,149 @@ export function StoreProvider({ children }) {
       return { ...prev, products, sales: [...prev.sales, sale], nextInvoice: prev.nextInvoice + 1 }
     })
     return sale
+  }
+
+  // Confirma el pago de una venta PENDIENTE: pasa a 'completada', registra el
+  // cobro y AHÍ SÍ emite la factura electrónica. El dinero se imputa a la caja
+  // abierta en este momento (si la hay).
+  const confirmSalePayment = (saleId, { paymentMethod = 'efectivo', received } = {}) => {
+    const s = stateRef.current
+    const target = s?.sales.find((x) => x.id === saleId)
+    if (!target) return null
+    if (target.status !== 'pendiente') {
+      showToast('Esa factura ya no está pendiente', 'warning')
+      return null
+    }
+    const total = Number(target.total) || 0
+    const cashMethod = paymentMethod === 'efectivo' || paymentMethod === 'nequi'
+    const receivedNum = cashMethod ? Math.max(Number(received) || 0, total) : total
+    const paidAt = new Date().toISOString()
+    const patch = {
+      status: 'completada',
+      paidAt,
+      paymentMethod,
+      received: receivedNum,
+      change: cashMethod ? Math.max(0, receivedNum - total) : 0,
+      sessionId: s.cash?.open?.id || target.sessionId || null,
+    }
+    // Pago confirmado -> factura electrónica
+    patch.eInvoice = emitElectronicInvoice({ ...target, ...patch }, s.settings)
+    setState((prev) =>
+      prev ? { ...prev, sales: prev.sales.map((x) => (x.id === saleId ? { ...x, ...patch } : x)) } : prev,
+    )
+    // El cambio a devolver es el aviso más importante del cobro: se queda más tiempo
+    if (patch.change > 0) {
+      showToast(`Cambio a devolver: ${formatMoney(patch.change)} · FE emitida`, 'success', TOAST_LONG_MS)
+    } else {
+      showToast(`Pago confirmado · ${formatMoney(total)} · FE emitida`)
+    }
+    return { ...target, ...patch }
+  }
+
+  // Cancela una factura PENDIENTE: devuelve el stock y no se emite FE.
+  const cancelPendingSale = (saleId) => {
+    const target = stateRef.current?.sales.find((x) => x.id === saleId)
+    if (!target || target.status !== 'pendiente') return null
+    setState((prev) => {
+      if (!prev) return prev
+      const sale = prev.sales.find((x) => x.id === saleId)
+      if (!sale || sale.status !== 'pendiente') return prev
+      const products = prev.products.map((prod) => {
+        const item = sale.items.find((i) => i.productId === prod.id)
+        return item ? { ...prod, stock: prod.stock + item.qty } : prod
+      })
+      const sales = prev.sales.map((x) =>
+        x.id === saleId
+          ? { ...x, status: 'anulada', annulledAt: new Date().toISOString(), voidReason: 'pendiente_cancelada' }
+          : x,
+      )
+      return { ...prev, products, sales }
+    })
+    showToast('Factura pendiente cancelada · stock devuelto', 'warning')
+    return target
+  }
+
+  // Edita los productos de una factura PENDIENTE (agregar/quitar/cambiar cantidades
+  // y descuento). Devuelve lo quitado al inventario y descuenta lo agregado.
+  // Solo aplica a pendientes: las completadas ya tienen FE emitida y no se tocan.
+  const updatePendingSaleItems = (saleId, { items, discountPct } = {}) => {
+    const s = stateRef.current
+    const target = s?.sales.find((x) => x.id === saleId)
+    if (!target) return { ok: false, error: 'Factura no encontrada' }
+    if (target.status !== 'pendiente') {
+      showToast('Solo se pueden editar facturas pendientes', 'warning')
+      return { ok: false, error: 'No está pendiente' }
+    }
+
+    // Normaliza contra el inventario actual: conserva el precio ya facturado
+    // en los items que existían y usa el de catálogo en los nuevos.
+    const clean = []
+    for (const it of Array.isArray(items) ? items : []) {
+      const qty = Math.floor(Number(it.qty) || 0)
+      const prod = s.products.find((p) => p.id === it.productId)
+      if (!prod || qty <= 0) continue
+      const before = target.items.find((i) => i.productId === prod.id)
+      clean.push({
+        productId: prod.id,
+        name: prod.name,
+        code: prod.code,
+        emoji: prod.emoji,
+        price: Number(before ? before.price : prod.price) || 0,
+        // Igual que el precio, el costo se congela por producto en la factura
+        cost: Number(before?.cost ?? prod.cost) || 0,
+        qty,
+      })
+    }
+    if (!clean.length) {
+      showToast('La factura debe tener al menos un producto', 'warning')
+      return { ok: false, error: 'Sin productos' }
+    }
+
+    // Stock disponible = stock actual + lo que ESTA factura ya tenía reservado
+    for (const it of clean) {
+      const prod = s.products.find((p) => p.id === it.productId)
+      const reserved = target.items.find((i) => i.productId === prod.id)?.qty || 0
+      const max = Math.max(0, (Number(prod.stock) || 0) + reserved)
+      if (it.qty > max) {
+        showToast(`Stock insuficiente para ${prod.name} (disponible ${max})`, 'warning')
+        return { ok: false, error: 'Stock insuficiente' }
+      }
+    }
+
+    const pct = Math.max(0, Math.min(100, Number(discountPct) || 0))
+    const subtotal = clean.reduce((sum, i) => sum + i.price * i.qty, 0)
+    const total = Math.round((subtotal * (100 - pct)) / 100)
+
+    setState((prev) => {
+      if (!prev) return prev
+      const sale = prev.sales.find((x) => x.id === saleId)
+      if (!sale || sale.status !== 'pendiente') return prev
+      const oldQty = (id) => sale.items.find((i) => i.productId === id)?.qty || 0
+      const newQty = new Map(clean.map((i) => [i.productId, i.qty]))
+      const products = prev.products.map((prod) => {
+        const next = prod.stock + oldQty(prod.id) - (newQty.get(prod.id) || 0)
+        return next === prod.stock ? prod : { ...prod, stock: Math.max(0, next) }
+      })
+      const sales = prev.sales.map((x) =>
+        x.id === saleId ? { ...x, items: clean, subtotal, discountPct: pct, total } : x,
+      )
+      return { ...prev, products, sales }
+    })
+    showToast(`Factura pendiente actualizada · ${formatMoney(total)}`)
+    return { ok: true, saleId }
+  }
+
+  // Emite la FE de una venta completada que aún no la tenga (ventas antiguas).
+  const issueElectronicInvoice = (saleId) => {
+    const s = stateRef.current
+    const target = s?.sales.find((x) => x.id === saleId)
+    if (!target || target.status !== 'completada' || target.eInvoice) return null
+    const eInvoice = emitElectronicInvoice(target, s.settings)
+    setState((prev) =>
+      prev ? { ...prev, sales: prev.sales.map((x) => (x.id === saleId ? { ...x, eInvoice } : x)) } : prev,
+    )
+    showToast(`Factura electrónica ${eInvoice.number} emitida`)
+    return eInvoice
   }
 
   const voidSale = (saleId) => {
@@ -232,9 +463,10 @@ export function StoreProvider({ children }) {
     return { ok: true, session }
   }
 
-  // Cierra la caja: arqueo (dinero contado) + retiros/ingresos extra.
-  // El resumen queda congelado en el historial para poder consultarlo siempre.
-  const closeCash = ({ countedCash = 0, withdrawals = 0, otherIncome = 0, note = '' } = {}) => {
+  // Cierra la caja: arqueo (dinero contado) + retiros/ingresos extra, y anota
+  // cuánta base queda en el cajón para el día siguiente. El resumen queda
+  // congelado en el historial para poder consultarlo siempre.
+  const closeCash = ({ countedCash = 0, withdrawals = 0, otherIncome = 0, nextOpeningCash = 0, note = '' } = {}) => {
     const s = stateRef.current
     const session = s?.cash?.open
     if (!s || !session) {
@@ -243,18 +475,23 @@ export function StoreProvider({ children }) {
     }
     const actor = cashActor()
     const closedAt = new Date().toISOString()
+    const counted = Math.max(0, Number(countedCash) || 0)
+    // La base no puede superar el dinero contado: si lo hiciera, "lo que se
+    // entrega" daría negativo.
+    const base = Math.min(Math.max(0, Number(nextOpeningCash) || 0), counted)
     const withMovements = {
       ...session,
       withdrawals: Math.max(0, Number(withdrawals) || 0),
       otherIncome: Math.max(0, Number(otherIncome) || 0),
+      nextOpeningCash: base,
     }
     const summary = cashSessionSummary({
       sales: s.sales,
       session: withMovements,
       settings: s.settings,
+      products: s.products,
       until: closedAt,
     })
-    const counted = Number(countedCash) || 0
     const difference = Math.round((counted - summary.expectedCash) * 100) / 100
     const closing = {
       ...withMovements,
@@ -263,6 +500,8 @@ export function StoreProvider({ children }) {
       closedById: actor.id,
       note: String(note || '').trim() || session.note || '',
       countedCash: counted,
+      // Efectivo que se entrega = lo contado − la base que queda en el cajón
+      deliveredCash: counted - base,
       difference,
       summary,
     }
@@ -360,16 +599,84 @@ export function StoreProvider({ children }) {
     showToast('Registro eliminado', 'warning')
   }
 
+  // ---------- Abonos a deudas (parciales) ----------
+  // Registra un abono sobre una deuda del negocio o una cuenta por cobrar.
+  // Al llegar al monto total, la deuda pasa sola a 'pagada' / 'cobrada'.
+  const addDebtPayment = (debtId, { amount, date, note = '' } = {}) => {
+    const debt = stateRef.current?.debts.find((d) => d.id === debtId)
+    if (!debt) return { ok: false, error: 'Registro no encontrado' }
+    const value = Math.round(Number(amount) || 0)
+    const rest = debtRemaining(debt)
+    if (value <= 0) {
+      showToast('El abono debe ser mayor a 0', 'warning')
+      return { ok: false, error: 'Monto inválido' }
+    }
+    if (value > rest) {
+      showToast(`Solo falta ${formatMoney(rest)} por ${debt.type === 'pagar' ? 'pagar' : 'cobrar'}`, 'warning')
+      return { ok: false, error: 'Abono mayor a la deuda' }
+    }
+    const payment = {
+      id: uid(),
+      amount: value,
+      date: date || new Date().toISOString(),
+      note: String(note || '').trim(),
+    }
+    setState((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        debts: prev.debts.map((d) => {
+          if (d.id !== debtId) return d
+          const payments = [...(Array.isArray(d.payments) ? d.payments : []), payment]
+          const totalPaid = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+          const done = d.status === 'pagada' || totalPaid >= (Number(d.amount) || 0)
+          return { ...d, payments, status: done ? 'pagada' : 'pendiente' }
+        }),
+      }
+    })
+    showToast(
+      rest - value <= 0
+        ? `Abono de ${formatMoney(value)} · deuda saldada ✅`
+        : `Abono de ${formatMoney(value)} registrado · faltan ${formatMoney(rest - value)}`,
+    )
+    return { ok: true, payment }
+  }
+
+  // Quita un abono registrado (por error de digitación) y revierte el estado
+  const removeDebtPayment = (debtId, paymentId) => {
+    const debt = stateRef.current?.debts.find((d) => d.id === debtId)
+    if (!debt) return { ok: false, error: 'Registro no encontrado' }
+    const payments = (Array.isArray(debt.payments) ? debt.payments : []).filter((p) => p.id !== paymentId)
+    if (payments.length === (debt.payments || []).length) return { ok: false, error: 'Abono no encontrado' }
+    const totalPaid = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+    setState((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        debts: prev.debts.map((d) =>
+          d.id === debtId
+            ? { ...d, payments, status: totalPaid >= (Number(d.amount) || 0) ? 'pagada' : 'pendiente' }
+            : d,
+        ),
+      }
+    })
+    showToast('Abono eliminado', 'warning')
+    return { ok: true }
+  }
+
   // ---------- Nómina ----------
+  // El pago se identifica por userId + `period` (llave del período: día, semana,
+  // quincena o mes). Los registros antiguos guardaban `month`; se siguen
+  // aceptando y se leen igual (ver PayrollView) para no perder lo ya pagado.
   const recordPayroll = (rec) => {
     setState((prev) => {
       if (!prev) return prev
-      const exists = prev.payrolls.some((p) => p.userId === rec.userId && p.month === rec.month)
+      const exists = prev.payrolls.some((p) => p.userId === rec.userId && (p.period || p.month) === rec.period)
       if (exists) {
         return {
           ...prev,
           payrolls: prev.payrolls.map((p) =>
-            p.userId === rec.userId && p.month === rec.month ? { ...p, ...rec } : p,
+            p.userId === rec.userId && (p.period || p.month) === rec.period ? { ...p, ...rec } : p,
           ),
         }
       }
@@ -377,10 +684,10 @@ export function StoreProvider({ children }) {
     })
     showToast('Pago de nómina registrado')
   }
-  const removePayroll = (userId, month) => {
+  const removePayroll = (userId, period) => {
     setState((prev) =>
       prev
-        ? { ...prev, payrolls: prev.payrolls.filter((p) => !(p.userId === userId && p.month === month)) }
+        ? { ...prev, payrolls: prev.payrolls.filter((p) => !(p.userId === userId && (p.period || p.month) === period)) }
         : prev,
     )
     showToast('Registro de pago eliminado', 'warning')
@@ -414,9 +721,23 @@ export function StoreProvider({ children }) {
       commissionPct: 0,
       createdAt: new Date().toISOString(),
     }
-    setState({ ...base, settings, users: [admin], products: [], sales: [], nextInvoice: 1, debts: [], payrolls: [], cash: emptyCash() })
-    setUserId(admin.id)
-    try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
+    // IMPORTANTE: el setup NUNCA destruye datos que ya existen. Antes este
+    // setState ponia products/sales/debts/payrolls/cash en [] y ponia
+    // nextInvoice en 1, asi que volver a pasar el asistente (por ejemplo tras
+    // restaurar un respaldo sin usuarios) borraba todo el historial de ventas.
+    // Aqui solo se crea el admin si no hay ninguno y se conservan ventas,
+    // inventario, deudas, nomina, cierres de caja y la numeracion de facturas.
+    const nextNumber = (base.sales || []).reduce((max, s) => Math.max(max, Number(s.number) || 0), 0)
+    setState({
+      ...base,
+      settings,
+      users: base.users?.length ? base.users : [admin],
+      nextInvoice: Math.max(Number(base.nextInvoice) || 1, nextNumber + 1),
+    })
+    if (!base.users?.length) {
+      setUserId(admin.id)
+      try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
+    }
     const preset = BUSINESS_PRESETS[businessType]
     showToast(`¡${settings.businessName} listo!${preset ? ` Plantilla ${preset.label} aplicada.` : ''}`)
     return { ok: true }
@@ -439,7 +760,13 @@ export function StoreProvider({ children }) {
   }
 
   // Borra TODO y deja la app en cero (produccion). keepUsers=true conserva el admin.
+  // Se pide confirmacion explicita porque las ventas NO se pueden recuperar.
   const clearAllData = (keepUsers = true) => {
+    const before = stateRef.current
+    if (before?.sales?.length && !window.confirm(
+      `Esto borra ${before.sales.length} venta(s) de forma permanente y no se puede deshacer.\n` +
+      '¿Seguro que quieres continuar?',
+    )) return false
     setState((prev) => {
       if (!prev) return prev
       return {
@@ -453,8 +780,46 @@ export function StoreProvider({ children }) {
         users: keepUsers ? prev.users : [],
       }
     })
+    // Se limpia también la red de seguridad: aquí el borrado es intencional
+    saveSalesGuard([])
     showToast('Datos borrados: la app quedo en cero', 'warning')
+    return true
   }
+
+  // SOLO DESARROLLO: carga datos de prueba (botón en Configuración > Zona de
+  // peligro o consola: __cargarDatosDemo()). En producción el valor es `null`
+  // y el import dinámico de devSeed.js desaparece del bundle.
+  const loadDevDemoData = useMemo(
+    () =>
+      import.meta.env.DEV
+        ? async ({ replace = true } = {}) => {
+            if (!stateRef.current) return false
+            try {
+              const { applyDevSeed } = await import('../data/devSeed.js')
+              setState(applyDevSeed(stateRef.current, { replace }))
+              showToast(replace ? 'Datos demo cargados (todo reemplazado)' : 'Datos demo agregados')
+              return true
+            } catch {
+              showToast('No se pudieron cargar los datos demo', 'warning')
+              return false
+            }
+          }
+        : null,
+    [],
+  )
+
+  // Atajo de desarrollo en la consola del navegador
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined
+    window.__cargarDatosDemo = (replace = true) => loadDevDemoData?.({ replace })
+    return () => {
+      try {
+        delete window.__cargarDatosDemo
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [loadDevDemoData])
 
   // Exportar respaldo JSON (descarga) e importar respaldo
   const exportBackup = () => {
@@ -527,9 +892,14 @@ export function StoreProvider({ children }) {
       updateSettings,
       applyPreset,
       clearAllData,
+      loadDevDemoData,
       exportBackup,
       importBackup,
       addSale,
+      confirmSalePayment,
+      cancelPendingSale,
+      updatePendingSaleItems,
+      issueElectronicInvoice,
       voidSale,
       addProduct,
       updateProduct,
@@ -540,6 +910,8 @@ export function StoreProvider({ children }) {
       addDebt,
       updateDebt,
       deleteDebt,
+      addDebtPayment,
+      removeDebtPayment,
       recordPayroll,
       removePayroll,
       openCash,

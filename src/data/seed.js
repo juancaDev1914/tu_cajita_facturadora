@@ -65,7 +65,7 @@ function generateDemoSales() {
         subtotal += prod.price * qty
         const existing = items.find((it) => it.productId === prod.id)
         if (existing) existing.qty += qty
-        else items.push({ productId: prod.id, name: prod.name, code: prod.code, price: prod.price, qty })
+        else items.push({ productId: prod.id, name: prod.name, code: prod.code, price: prod.price, cost: prod.cost, qty })
         soldPerProduct[prod.id] = (soldPerProduct[prod.id] || 0) + qty
       }
 

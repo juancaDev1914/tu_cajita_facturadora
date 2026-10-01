@@ -43,9 +43,29 @@ export default function CashReport({ report, settings, title = 'REPORTE DE CIERR
           <span className="r-name">Ventas anuladas</span>
           <span className="r-subtotal">{s.canceledCount ?? 0}</span>
         </div>
+        {(s.pendingCount ?? 0) > 0 && (
+          <div className="r-line">
+            <span className="r-name">⏳ Pendientes de pago (no cobradas)</span>
+            <span className="r-subtotal">
+              {s.pendingCount} · {formatMoney(s.pendingAmount)}
+            </span>
+          </div>
+        )}
         <div className="r-line">
           <span className="r-name">Total facturado</span>
           <span className="r-subtotal">{formatMoney(s.revenue)}</span>
+        </div>
+        <div className="r-line">
+          <span className="r-name">Costo de lo vendido</span>
+          <span className="r-subtotal">{formatMoney(s.cost ?? 0)}</span>
+        </div>
+        <div className="r-line">
+          <span className="r-name">
+            <b>Ganancia de la venta</b>
+          </span>
+          <span className="r-subtotal">
+            {formatMoney(s.profit ?? 0)} ({Number(s.profitMargin || 0).toFixed(1)}%)
+          </span>
         </div>
         {rows.map((m) => (
           <div key={m.id} className="r-line">
@@ -81,8 +101,21 @@ export default function CashReport({ report, settings, title = 'REPORTE DE CIERR
       <div className="r-totals">
         <span>Efectivo inicial: {formatMoney(s.openingCash)}</span>
         <span>Ventas en el cajón: {formatMoney(s.drawerRevenue)}</span>
+        {Number(s.bankedRevenue) > 0 && (
+          <span>
+            Otros medios (fuera del cajón): {formatMoney(s.bankedRevenue)}
+            {(s.byMethod || [])
+              .filter((m) => !m.isDrawer && m.sales > 0)
+              .map((m) => ` · ${m.label}`)
+              .join('')}
+          </span>
+        )}
         {Number(s.otherIncome) > 0 && <span>Ingresos extra: {formatMoney(s.otherIncome)}</span>}
         {Number(s.withdrawals) > 0 && <span>Retiros: −{formatMoney(s.withdrawals)}</span>}
+        {Number(s.nextOpeningCash) > 0 && (
+          <span>Base para el día siguiente: {formatMoney(s.nextOpeningCash)}</span>
+        )}
+        {report?.deliveredCash != null && <span>Se entrega: {formatMoney(report.deliveredCash)}</span>}
         <span>Esperado en el cajón: {formatMoney(s.expectedCash)}</span>
         {report?.countedCash != null && <span>Contado: {formatMoney(report.countedCash)}</span>}
         <strong>

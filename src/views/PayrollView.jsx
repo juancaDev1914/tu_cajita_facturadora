@@ -1,44 +1,64 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDate } from '../utils/format.js'
+import {
+  PAYROLL_PERIODS,
+  isPeriodId,
+  periodRange,
+  periodKey,
+  periodLabel,
+  shiftPeriod,
+  proratedBase,
+  periodFraction,
+} from '../utils/payroll.js'
 
-function monthKey(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  return `${y}-${m}`
-}
-
-function monthLabel(month) {
-  const [y, m] = month.split('-').map(Number)
-  const names = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
-  return `${names[m - 1]} ${y}`
+// 'YYYY-MM-DD' desde un Date local (toISOString() corrige el día por zona horaria)
+function isoDay(d) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
 export default function PayrollView() {
-  const { sales, users, payrolls, recordPayroll, removePayroll } = useStore()
-  const [month, setMonth] = useState(() => monthKey(new Date()))
+  const { sales, users, payrolls, settings, recordPayroll, removePayroll } = useStore()
+  // Periodicidad elegida: día, semana, quincena o mes. Arranca con la que quedó
+  // guardada en Configuración.
+  const [period, setPeriod] = useState(() =>
+    isPeriodId(settings?.payrollPeriod) ? settings.payrollPeriod : 'mes',
+  )
+  // Fecha ancla: se muestra el período que contiene este día
+  const [anchor, setAnchor] = useState(() => new Date())
 
   const sellers = users.filter((u) => u.role === 'vendedor' && u.active)
+  const { from, to } = useMemo(() => periodRange(period, anchor), [period, anchor])
+  const key = useMemo(() => periodKey(period, anchor), [period, anchor])
+  const fraction = periodFraction(period, anchor)
 
-  const monthSales = useMemo(() => {
-    const [y, m] = month.split('-').map(Number)
-    const res = {}
+  // Ventas completadas dentro del período, agrupadas por cajero
+  const periodSales = useMemo(() => {
+    const byCashier = {}
+    let total = 0
     for (const s of sales) {
       if (s.status !== 'completada') continue
       const d = new Date(s.date)
-      if (d.getFullYear() !== y || d.getMonth() !== m - 1) continue
-      res[s.cashier] = (res[s.cashier] || 0) + s.total
+      if (d < from || d >= to) continue
+      byCashier[s.cashier] = (byCashier[s.cashier] || 0) + s.total
+      total += s.total
     }
-    return res
-  }, [sales, month])
+    return { byCashier, total }
+  }, [sales, from, to])
+
+  // El pago ya registrado se busca por la llave del período. Los registros
+  // antiguos guardaban `month` ('2026-09'), así que también se acepta ese formato.
+  const legacyKey = key.replace(/^[a-z]+:/, '')
+  const findPaid = (userId) =>
+    payrolls.find((p) => p.userId === userId && (p.period === key || (!p.period && p.month === legacyKey))) || null
 
   const rows = sellers.map((u) => {
-    const salesTotal = monthSales[u.name] || 0
-    const base = Number(u.baseSalary) || 0
+    const salesTotal = periodSales.byCashier[u.name] || 0
+    const base = proratedBase(u.baseSalary, period, anchor)
     const commission = (salesTotal * (Number(u.commissionPct) || 0)) / 100
     const gross = Math.round(base + commission)
-    const paid = payrolls.find((p) => p.userId === u.id && p.month === month) || null
-    return { u, salesTotal, commission, gross, paid }
+    return { u, salesTotal, base, commission, gross, paid: findPaid(u.id) }
   })
 
   const totalNomina = rows.reduce((s, r) => s + r.gross, 0)
@@ -46,23 +66,63 @@ export default function PayrollView() {
   const totalPending = totalNomina - totalPaid
 
   const register = (r) => {
-    recordPayroll({ userId: r.u.id, month, amount: r.gross, paidAt: new Date().toISOString() })
+    recordPayroll({
+      userId: r.u.id,
+      period: key,
+      periodType: period,
+      month: legacyKey,
+      base: Math.round(r.base),
+      commission: Math.round(r.commission),
+      amount: r.gross,
+      paidAt: new Date().toISOString(),
+    })
   }
+
+  const onAnchor = (e) => {
+    const v = e.target.value
+    if (!v) return
+    setAnchor(period === 'mes' ? new Date(`${v}-01T00:00:00`) : new Date(`${v}T00:00:00`))
+  }
+  const meta = PAYROLL_PERIODS.find((p) => p.id === period)
 
   return (
     <>
+      <div className="dash-head">
+        <div className="tabs">
+          {PAYROLL_PERIODS.map((p) => (
+            <button
+              key={p.id}
+              className={`tab ${period === p.id ? 'active' : ''}`}
+              onClick={() => setPeriod(p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="filters-row">
         <label>Período
-          <input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} />
+          <input
+            type={period === 'mes' ? 'month' : 'date'}
+            className="input"
+            value={period === 'mes' ? key.replace('mes:', '') : isoDay(from)}
+            onChange={onAnchor}
+          />
         </label>
-        <span className="muted">Nómina de <strong>{monthLabel(month)}</strong></span>
+        <button className="btn-ghost" onClick={() => setAnchor(shiftPeriod(period, anchor, -1))}>◀ Anterior</button>
+        <button className="btn-ghost" onClick={() => setAnchor(new Date())}>Actual</button>
+        <button className="btn-ghost" onClick={() => setAnchor(shiftPeriod(period, anchor, 1))}>Siguiente ▶</button>
         <span className="grow" />
-        <button className="btn-ghost" onClick={() => setMonth(monthKey(new Date()))}>Mes actual</button>
+        <span className="muted">
+          Nómina <strong>{meta.short.toLowerCase()}</strong> · <strong>{periodLabel(period, anchor)}</strong>
+        </span>
       </div>
 
       <div className="inv-cards">
         <div className="kpi-card"><span>👥 Vendedores activos</span><strong>{sellers.length}</strong></div>
-        <div className="kpi-card"><span>💰 Nómina total del mes</span><strong>{formatMoney(totalNomina)}</strong></div>
+        <div className="kpi-card"><span>🧾 Ventas del período</span><strong>{formatMoney(periodSales.total)}</strong></div>
+        <div className="kpi-card"><span>💰 Nómina del período</span><strong>{formatMoney(totalNomina)}</strong></div>
         <div className="kpi-card"><span>✅ Pagado</span><strong>{formatMoney(totalPaid)}</strong></div>
         <div className="kpi-card warn"><span>⏳ Pendiente</span><strong>{formatMoney(totalPending)}</strong></div>
       </div>
@@ -71,9 +131,9 @@ export default function PayrollView() {
         <thead>
           <tr>
             <th>Vendedor</th>
-            <th>Ventas del mes</th>
+            <th>Ventas del período</th>
             <th>Comisión</th>
-            <th>Salario base</th>
+            <th>Base del período</th>
             <th>Total</th>
             <th>Estado</th>
             <th className="th-right">Acciones</th>
@@ -85,7 +145,12 @@ export default function PayrollView() {
               <td><strong>{r.u.name}</strong><br /><small className="muted">@{r.u.username}</small></td>
               <td>{formatMoney(r.salesTotal)}</td>
               <td>{formatMoney(Math.round(r.commission))}</td>
-              <td>{formatMoney(r.u.baseSalary || 0)}</td>
+              <td>
+                {formatMoney(Math.round(r.base))}
+                {period !== 'mes' && (
+                  <><br /><small className="muted">de {formatMoney(r.u.baseSalary || 0)}/mes</small></>
+                )}
+              </td>
               <td><strong>{formatMoney(r.gross)}</strong></td>
               <td>
                 {r.paid ? (
@@ -96,7 +161,7 @@ export default function PayrollView() {
               </td>
               <td className="td-right">
                 {r.paid ? (
-                  <button className="btn-ghost btn-sm danger" onClick={() => removePayroll(r.u.id, month)}>↩️ Revertir pago</button>
+                  <button className="btn-ghost btn-sm danger" onClick={() => removePayroll(r.u.id, key)}>↩️ Revertir pago</button>
                 ) : (
                   <button className="btn-primary btn-sm" onClick={() => register(r)}>💵 Registrar pago</button>
                 )}
@@ -110,8 +175,14 @@ export default function PayrollView() {
       </table>
 
       <div className="alert-box warn">
-        💡 <strong>Cálculo:</strong> Total = Salario base mensual + (Ventas del mes × Comisión %).
-        La comisión se calcula sobre las ventas <em>completadas</em> del vendedor en el período.
+        💡 <strong>Cálculo:</strong> Total = Base del período + (Ventas del período × Comisión %).
+        {period === 'mes' ? (
+          <> La base es el salario base mensual completo del vendedor.</>
+        ) : (
+          <> La base mensual se prorratea por los días del período ({Math.round(fraction * 100)}% del mes),
+          así la suma de todos los períodos del mes da el salario base completo.</>
+        )}{' '}
+        La comisión se calcula sobre las ventas <em>completadas</em> del vendedor dentro del período.
       </div>
     </>
   )

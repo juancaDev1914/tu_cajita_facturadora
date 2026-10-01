@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar.jsx'
 import MobileTopbar from './components/MobileTopbar.jsx'
 import BottomNav from './components/BottomNav.jsx'
 import Toast from './components/Toast.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 import LoginView from './views/LoginView.jsx'
 import SetupWizard from './views/SetupWizard.jsx'
 import useBackGuard from './hooks/useBackGuard.js'
@@ -141,21 +142,23 @@ function Shell() {
             </div>
           )}
           <Suspense fallback={<ViewLoader />}>
-            {current === 'pos' && <POSView user={currentUser} />}
-            {current === 'caja' && <CashView />}
-            {current === 'inventario' && <InventoryView />}
-            {current === 'historial' && (
-              <SalesView
-                owner={currentUser.role === 'vendedor' ? currentUser.name : null}
-                canVoid={currentUser.role === 'admin'}
-              />
-            )}
-            {current === 'reportes' && <ReportsView />}
-            {current === 'dashboard' && <DashboardView />}
-            {current === 'deudas' && <DebtView />}
-            {current === 'nomina' && <PayrollView />}
-            {current === 'usuarios' && <UsersView />}
-            {current === 'configuracion' && <SettingsView />}
+            <ErrorBoundary key={current}>
+              {current === 'pos' && <POSView user={currentUser} />}
+              {current === 'caja' && <CashView />}
+              {current === 'inventario' && <InventoryView />}
+              {current === 'historial' && (
+                <SalesView
+                  owner={currentUser.role === 'vendedor' ? currentUser.name : null}
+                  canVoid={currentUser.role === 'admin'}
+                />
+              )}
+              {current === 'reportes' && <ReportsView />}
+              {current === 'dashboard' && <DashboardView />}
+              {current === 'deudas' && <DebtView />}
+              {current === 'nomina' && <PayrollView />}
+              {current === 'usuarios' && <UsersView />}
+              {current === 'configuracion' && <SettingsView />}
+            </ErrorBoundary>
           </Suspense>
         </main>
       </div>

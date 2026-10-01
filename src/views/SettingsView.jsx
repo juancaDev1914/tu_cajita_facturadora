@@ -6,6 +6,7 @@ import DangerZone from '../components/DangerZone.jsx'
 import MoneyField from '../components/MoneyField.jsx'
 import { CURRENCIES, getCurrencyLabel } from '../utils/format.js'
 import { cashDrawerIdsOf } from '../utils/cash.js'
+import { PAYROLL_PERIODS, isPeriodId } from '../utils/payroll.js'
 
 export default function SettingsView() {
   const { settings, updateSettings, applyPreset } = useStore()
@@ -130,6 +131,44 @@ export default function SettingsView() {
         <p className="autosave-note">
           El arqueo compara el dinero contado contra: efectivo inicial + ventas de esos medios +
           ingresos extra − retiros. Lo pagado con tarjeta o transferencia no debe estar en el cajón.
+          Al cerrar también se anota cuánta base queda en el cajón para el día siguiente.
+        </p>
+        {(settings.paymentMethods || []).some((m) => m.id !== 'efectivo' && drawerIds.includes(m.id)) && (
+          <div className="alert-box warn">
+            ⚠️ Marcaste como “entra al cajón”{' '}
+            <strong>
+              {(settings.paymentMethods || [])
+                .filter((m) => m.id !== 'efectivo' && drawerIds.includes(m.id))
+                .map((m) => m.label)
+                .join(', ')}
+            </strong>
+            . Si ese dinero va a una cuenta, billetera o datáfono y no se queda físicamente en el
+            cajón, quítalo aquí: si no, suma al arqueo y en el modal “Otros medios” aparece en $0.
+          </div>
+        )}
+      </section>
+
+      <section className="card">
+        <h3>👥 Nómina (periodicidad de pago)</h3>
+        <div className="form-grid">
+          <label>Periodo con el que se calcula
+            <select
+              className="input"
+              value={isPeriodId(settings.payrollPeriod) ? settings.payrollPeriod : 'mes'}
+              onChange={(e) => setField('payrollPeriod', e.target.value)}
+            >
+              {PAYROLL_PERIODS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="autosave-note">
+          La vista Nómina siempre deja cambiar el periodo (día, semana, quincena o mes). Esta
+          opción es con el que se abre por defecto. El salario base es mensual: en día, semana y
+          quincena se prorratea por los días del periodo.
         </p>
       </section>
 

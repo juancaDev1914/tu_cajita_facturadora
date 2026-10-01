@@ -239,7 +239,7 @@ p { margin: 0; }
 .input-inline { width: 60px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
 
 /* ---------- Botones ---------- */
-.btn-primary, .btn-ghost, .btn-danger {
+.btn-primary, .btn-ghost, .btn-danger, .btn-hold {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -262,6 +262,9 @@ p { margin: 0; }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #b91c1c; }
+/* Dejar la venta pendiente de pago (sin emitir factura electrónica) */
+.btn-hold { background: var(--warning-soft); color: var(--warning); border-color: var(--warning); }
+.btn-hold:hover { background: #fde68a; }
 .btn-sm { padding: 6px 12px; font-size: 12px; min-height: 36px; }
 .btn-big { padding: 14px 20px; font-size: 16px; min-height: 52px; width: 100%; }
 .btn-icon {
@@ -371,6 +374,14 @@ p { margin: 0; }
 .alert-box { padding: 12px; border-radius: 10px; margin-bottom: 12px; font-size: 13px; }
 .alert-box.warn { background: var(--warning-soft); border: 1px solid #fde68a; color: var(--warning); }
 .alert-box.info { background: var(--primary-soft); border: 1px solid #bfdbfe; color: var(--primary-dark); }
+/* Alerta de "caja cerrada" en la vista Caja: siempre visible con acción */
+.cash-closed-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cash-closed-text { min-width: 0; }
+.cash-closed-text p { margin: 4px 0 0; line-height: 1.5; }
+/* Vista de error de sección (ErrorBoundary): evita la pantalla en blanca */
+.view-error { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 36px 16px; }
+.view-error .view-error-icon { font-size: 40px; line-height: 1; }
+.view-error .inline-form { justify-content: center; margin-top: 10px; flex-wrap: wrap; }
 
 /* ---------- Tablas ---------- */
 .table {
@@ -711,16 +722,18 @@ p { margin: 0; }
     font-size: 14px;
   }
   
-  .cart-item .ci-qty button, .qty-ctrl button {
+  .qty-btn {
     width: 36px;
     height: 36px;
-    font-size: 16px;
+    font-size: 18px;
   }
   
-  .cart-item .ci-qty span, .qty-ctrl span {
-    min-width: 20px;
-    font-size: 13px;
+  .qty-box {
+    height: 36px;
+    padding: 0 8px;
   }
+  
+  .qty-input { width: 34px; font-size: 14px; }
   
   .cart-item .ci-name, .ticket-item .ti-name {
     font-size: 12px;
@@ -935,41 +948,77 @@ p { margin: 0; }
   gap: 8px;
   order: 2;
 }
-.cart-item .ci-qty, .ticket-item .ti-right, .qty-ctrl {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* ---------- Selector de cantidad: [−] [1] [+] ---------- */
+.qty-ctrl {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
 }
-.cart-item .ci-qty button, .qty-ctrl button {
+.qty-btn {
   width: 40px;
   height: 40px;
+  flex: 0 0 auto;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--surface);
+  color: var(--text);
   cursor: pointer;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
-.cart-item .ci-qty button:hover, .qty-ctrl button:hover {
+.qty-btn:hover:not(:disabled) {
   border-color: var(--primary);
   color: var(--primary);
   background: var(--primary-soft);
 }
-.cart-item .ci-qty button:active, .qty-ctrl button:active {
+.qty-btn:active:not(:disabled) {
   transform: scale(0.9);
   background: var(--primary);
   color: #fff;
 }
-.cart-item .ci-qty button:disabled {
-  opacity: 0.4;
+.qty-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
-.cart-item .ci-qty span, .qty-ctrl span { font-weight: 700; min-width: 24px; text-align: center; font-size: 14px; }
+/* Caja del número: solo el input, a la misma altura que los botones */
+.qty-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+.qty-box:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+/* Cantidad editable a mano (teclado numérico): carrito del POS y facturas pendientes */
+.qty-input {
+  width: 38px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.qty-input:focus { outline: none; }
+.qty-input::-webkit-outer-spin-button,
+.qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .cart-item .ci-total { 
   font-weight: 700; 
   font-size: 13px; 
@@ -1192,8 +1241,13 @@ button, .chip, .prod-card, .cart-item, .nav-item {
 
 /* Larger touch targets for mobile */
 @media (max-width: 767px) {
-  .ci-qty button, .qty-ctrl button {
+  .qty-btn {
     min-width: 44px;
+    min-height: 44px;
+    border-radius: 12px;
+  }
+  
+  .qty-box {
     min-height: 44px;
     border-radius: 12px;
   }
@@ -1559,17 +1613,25 @@ button, .chip, .prod-card, .cart-item, .nav-item {
   z-index: 2000;
   animation: fadeIn 0.2s ease;
 }
+/* El modal ocupa TODA la pantalla en móvil: cabecera fija arriba, botones abajo
+   y solo el contenido se desliza (nada queda amontonado ni cortado).
+   En escritorio (>=768px) se convierte en un diálogo centrado y más ancho. */
 .modal {
   background: var(--surface);
-  border-radius: var(--radius) var(--radius) 0 0;
+  border-radius: 0;
   width: 100%;
   max-width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   animation: slideUp 0.25s ease;
 }
 .modal-head {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   padding: 16px;
@@ -1580,9 +1642,17 @@ button, .chip, .prod-card, .cart-item, .nav-item {
   z-index: 1;
 }
 .modal-head h3 { font-size: 16px; }
-.modal-body { padding: 16px; }
+.modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
 .modal-foot {
   display: flex;
+  flex-shrink: 0;
   gap: 10px;
   padding: 16px;
   border-top: 1px solid var(--border);
@@ -1887,7 +1957,16 @@ button, .chip, .prod-card, .cart-item, .nav-item {
   .receipt, .receipt * { visibility: visible; }
   .receipt { position: absolute; left: 0; top: 0; width: 100%; }
   .modal-backdrop { position: static; display: block; background: none; padding: 0; }
-  .modal { width: 100%; max-width: none; box-shadow: none; }
+  .modal {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    display: block;
+    overflow: visible;
+    box-shadow: none;
+  }
+  .modal-body { overflow: visible; padding: 0; }
   .modal-foot, .modal-head { display: none; }
 }
 
@@ -1947,20 +2026,24 @@ button, .chip, .prod-card, .cart-item, .nav-item {
     justify-content: space-between;
   }
 
+  /* En escritorio el modal deja de ser hoja inferior: diálogo centrado y amplio */
   .modal-backdrop {
     align-items: center;
     padding: 16px;
   }
 
   .modal {
+    height: auto;
+    max-height: 92vh;
     border-radius: var(--radius);
-    max-width: 500px;
-    max-height: 85vh;
+    max-width: 640px;
   }
 
-  .modal.modal-md { max-width: 600px; }
-  .modal.modal-lg { max-width: 800px; }
-  .modal.modal-sm { max-width: 400px; }
+  .modal.modal-md { max-width: 780px; }
+  .modal.modal-lg { max-width: 1040px; }
+  .modal.modal-xl { max-width: 1280px; }
+  .modal.modal-sm { max-width: 480px; }
+  .modal-body { padding: 20px; }
 
   .pos-layout {
     grid-template-columns: 1fr 320px;
@@ -2176,8 +2259,8 @@ button, .chip, .prod-card, .cart-item, .nav-item {
     -webkit-touch-callout: none;
   }
 
-  /* Modales: hoja inferior con altura útil real */
-  .modal { max-height: 92vh; }
+  /* Modales a pantalla completa en móvil/tablet (cabecera y botones siempre visibles) */
+  .modal { max-height: 100dvh; }
 }
 
 /* Apaisado con poco alto: la barra robaría espacio, se oculta (queda el ☰ superior) */
@@ -2334,6 +2417,158 @@ button, .chip, .prod-card, .cart-item, .nav-item {
 .cash-quick { margin-bottom: 12px; }
 .cash-quick .chip { cursor: pointer; }
 .cash-movements { display: grid; grid-template-columns: 1fr; gap: 10px; }
+/* Total facturado al pie del desglose de medios de pago */
+.cash-method-total {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 8px;
+  font-weight: 600;
+}
+
+/* ---------- Panel principal del arqueo: la respuesta, sin rodeos ----------
+   Tres números y ya. Todo lo demás queda en el desplegable de detalle. */
+.cash-hero {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.cash-hero-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: center;
+}
+.cash-hero-item > span {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.cash-hero-item > strong { font-size: 19px; }
+.cash-hero-item .up { color: var(--success); }
+.cash-hero-item .down { color: var(--danger); }
+/* "Te llevas hoy" es la cifra final: se resalta cuando ya se contó */
+.cash-hero-item.final {
+  background: var(--success-soft);
+  border-color: #bbf7d0;
+}
+@media (max-width: 480px) {
+  .cash-hero { grid-template-columns: 1fr; }
+}
+
+/* Detalle plegable: fuera de la vista hasta que se abre */
+.cash-details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  margin-bottom: 14px;
+}
+.cash-details > summary {
+  padding: 12px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  list-style: none;
+  user-select: none;
+}
+.cash-details > summary::-webkit-details-marker { display: none; }
+.cash-details > summary::before { content: '▸ '; }
+.cash-details[open] > summary::before { content: '▾ '; }
+.cash-details > summary:hover { background: var(--surface-2); }
+.cash-details .cash-rows,
+.cash-details .cash-methods,
+.cash-details .cash-mini,
+.cash-detail-sub { margin: 0 14px 12px; }
+.cash-detail-sub {
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 4px;
+}
+
+/* Resultado del arqueo en una línea: cuadrado / sobran / faltan */
+.cash-check {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.cash-check .ok { color: var(--success); }
+.cash-check .pos { color: var(--warning); }
+.cash-check .neg { color: var(--danger); }
+.cash-check .muted { color: var(--muted); font-weight: 500; }
+
+/* "De dónde sale la ganancia": muestra la resta (ventas − costo) explícita */
+.cash-why {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.cash-why-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.cash-why-row > strong { font-weight: 700; white-space: nowrap; }
+.cash-why-row.minus { color: var(--danger); }
+.cash-why-row.total {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+}
+.cash-why-row.total > strong { font-size: 16px; }
+.cash-why-row .up { color: var(--success); }
+.cash-why-row .down { color: var(--danger); }
+.cash-why > small {
+  display: block;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Atajos de la base: son opcionales, se muestran small y separados del campo */
+.cash-base-quick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.cash-base-quick > span {
+  font-size: 11px;
+  font-weight: 600;
+}
+.cash-base-quick .chip {
+  padding: 5px 10px;
+  min-height: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* La base del día siguiente va destacada, justo debajo del dinero contado */
+.cash-field-base {
+  background: var(--primary-soft);
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
 .cash-session-meta {
   display: flex;
   flex-direction: column;
@@ -2417,5 +2652,170 @@ button, .chip, .prod-card, .cart-item, .nav-item {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ============================================================
+   VENTAS PENDIENTES DE PAGO / FACTURACIÓN ELECTRÓNICA
+   ============================================================ */
+/* Botón "⏳ Pendientes" en el encabezado del carrito (POS) */
+.cart-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.pending-toggle {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* Lista de facturas pendientes (modal del POS) */
+.pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.pending-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.pending-row .pr-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pending-row .pr-info strong { font-size: 13px; color: var(--text); }
+.pending-row .pr-info span { font-size: 11px; color: var(--muted); }
+.pending-row .pr-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ---------- Edición de productos de una factura pendiente (modal) ---------- */
+.edit-sale-section { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+/* Resumen arriba: siempre se ve cuántos productos lleva la factura y su total */
+.edit-sale-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 10px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.edit-sale-summary strong { font-size: 15px; color: var(--text); }
+/* Desktop: factura a la izquierda y catálogo a la derecha, visibles a la vez */
+.edit-sale-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 18px; align-items: start; }
+@media (min-width: 720px) {
+  .edit-sale-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .edit-sale-items { max-height: 44vh; overflow-y: auto; padding: 2px; }
+}
+/* Móvil: la lista crece con la factura y el scroll lo hace el modal (nada se esconde) */
+.edit-sale-items { display: flex; flex-direction: column; gap: 8px; }
+.edit-sale-catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+.edit-sale-add {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text);
+  transition: all 0.15s;
+}
+.edit-sale-add span { font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-sale-add small { color: var(--muted); font-size: 11px; }
+.edit-sale-add:hover:not(:disabled) { border-color: var(--primary); background: var(--primary-soft); }
+.edit-sale-add:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------- Deudas: abonos parciales ---------- */
+.debt-progress {
+  width: 100%;
+  min-width: 70px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 4px 0 3px;
+}
+.debt-progress i { display: block; height: 100%; background: var(--success); }
+.debt-rest { display: block; margin-top: 4px; }
+.debt-pay-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.debt-pay-head strong { font-size: 14px; }
+.debt-payments { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.debt-pay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+/* Notas del modal de cobro / confirmación de pago */
+.pay-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pay-note.warn {
+  border-color: #fde68a;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* Bloque de factura electrónica en el detalle de la venta */
+.fe-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 12px;
+}
+.fe-box strong { font-size: 13px; }
+.fe-box code {
+  word-break: break-all;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.fe-box.warn {
+  border-color: #fde68a;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.fe-box .btn-ghost { align-self: flex-start; margin-top: 4px; }
 
 

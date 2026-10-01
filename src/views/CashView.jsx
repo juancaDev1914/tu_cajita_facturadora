@@ -17,7 +17,7 @@ function isSquared(diff) {
  * historial de cierres y reportes imprimibles/exportables.
  */
 export default function CashView() {
-  const { cash, sales, settings, currentUser, deleteCashSession } = useStore()
+  const { cash, sales, products, settings, currentUser, requireOpenCash, deleteCashSession } = useStore()
   const session = cash?.open
   const history = useMemo(() => cash?.history || [], [cash])
 
@@ -27,8 +27,8 @@ export default function CashView() {
   const [toDelete, setToDelete] = useState(null)
 
   const summary = useMemo(
-    () => (session ? cashSessionSummary({ sales, session, settings }) : null),
-    [sales, session, settings],
+    () => (session ? cashSessionSummary({ sales, session, settings, products }) : null),
+    [sales, session, settings, products],
   )
 
   const totals = useMemo(() => {
@@ -69,14 +69,18 @@ export default function CashView() {
     downloadCSV('cierres-de-caja.csv', [
       [
         'Abrio', 'Abrio (usuario)', 'Cerro', 'Cerro (usuario)', 'Ventas', 'Facturado',
-        'Efectivo inicial', 'Ventas en cajon', 'Retiros', 'Ingresos extra', 'Esperado',
-        'Contado', 'Diferencia', 'Nota',
+        'Costo vendido', 'Ganancia', 'Margen %', 'Efectivo inicial', 'Ventas en cajon',
+        'Retiros', 'Ingresos extra', 'Esperado', 'Contado', 'Diferencia',
+        'Base dia siguiente', 'Se entrega', 'Nota',
       ],
       ...history.map((h) => [
         h.openedAt || '', h.openedBy || '', h.closedAt || '', h.closedBy || '',
-        h.summary?.salesCount ?? 0, h.summary?.revenue ?? 0, h.openingCash ?? 0,
+        h.summary?.salesCount ?? 0, h.summary?.revenue ?? 0,
+        h.summary?.cost ?? 0, h.summary?.profit ?? 0, h.summary?.profitMargin ?? 0,
+        h.openingCash ?? 0,
         h.summary?.drawerRevenue ?? 0, h.summary?.withdrawals ?? 0, h.summary?.otherIncome ?? 0,
-        h.summary?.expectedCash ?? 0, h.countedCash ?? 0, h.difference ?? 0, h.note || '',
+        h.summary?.expectedCash ?? 0, h.countedCash ?? 0, h.difference ?? 0,
+        h.nextOpeningCash ?? 0, h.deliveredCash ?? 0, h.note || '',
       ]),
     ])
 
@@ -121,6 +125,13 @@ export default function CashView() {
                 Incial {formatMoney(summary.openingCash)} + efectivo {formatMoney(summary.drawerRevenue)}
               </small>
             </div>
+            <div className="kpi-card">
+              <span>🏆 Ganancia de la caja</span>
+              <strong className={summary.profit >= 0 ? 'up' : 'down'}>{formatMoney(summary.profit)}</strong>
+              <small className="muted">
+                Costo {formatMoney(summary.cost)} · {Number(summary.profitMargin || 0).toFixed(1)}% margen
+              </small>
+            </div>
           </div>
           <div className="cash-split">
             <CashMethods summary={summary} />
@@ -148,7 +159,14 @@ export default function CashView() {
               </div>
               <div className="cash-row">
                 <span>Dinero que NO está en el cajón</span>
-                <span>{formatMoney(summary.bankedRevenue)}</span>
+                <span>
+                  {summary.bankedRevenue > 0
+                    ? `${formatMoney(summary.bankedRevenue)} (${(summary.byMethod || [])
+                        .filter((m) => !m.isDrawer && m.sales > 0)
+                        .map((m) => m.label)
+                        .join(', ')})`
+                    : '—'}
+                </span>
               </div>
               {summary.canceledCount > 0 && (
                 <div className="cash-row minus">
@@ -156,18 +174,29 @@ export default function CashView() {
                   <span>{summary.canceledCount}</span>
                 </div>
               )}
+              {summary.pendingCount > 0 && (
+                <div className="cash-row">
+                  <span>⏳ Pendientes de pago (no suman al arqueo)</span>
+                  <span>
+                    {summary.pendingCount} · {formatMoney(summary.pendingAmount)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
           {summary.topProducts.length > 0 && (
             <div className="cash-mini">
-              <span className="cash-label">Más vendidos en esta caja</span>
-              {summary.topProducts.slice(0, 6).map((p) => (
+              <span className="cash-label">🏆 Ganancia por producto en esta caja</span>
+              {summary.topProducts.slice(0, 8).map((p) => (
                 <div key={p.key} className="cash-method">
-                  <span>{p.name}</span>
+                  <span>
+                    {p.name}
+                    <em> · {p.units} und · costo {formatMoney(p.cost)}</em>
+                  </span>
                   <strong>
-                    {formatMoney(p.revenue)}
-                    <small> ×{p.units}</small>
+                    {formatMoney(p.profit)}
+                    <small> venta {formatMoney(p.revenue)}</small>
                   </strong>
                 </div>
               ))}
@@ -194,12 +223,27 @@ export default function CashView() {
         </section>
       ) : (
         <>
-          {history.length === 0 && (
-            <div className="alert-box info">
-              La caja está <b>cerrada</b>. Ábrela con el efectivo inicial para llevar el control del
-              dinero físico del día: las ventas hechas mientras está abierta quedan atadas a esa caja.
+          {/* Estado cerrado: alerta SIEMPRE visible para que la vista nunca quede vacía */}
+          <div className="alert-box info cash-closed-alert">
+            <div className="cash-closed-text">
+              <strong>🔒 La caja está cerrada</strong>
+              <p>
+                Abre la caja con el efectivo inicial para controlar el dinero físico del día: las
+                ventas hechas mientras esté abierta quedan atadas a esa sesión y entran en su arqueo.
+              </p>
+              {requireOpenCash && (
+                <p className="muted">
+                  ⚠️ Mientras esté cerrada <b>no puedes facturar</b> desde el POS.
+                </p>
+              )}
+              {history.length === 0 && (
+                <p className="muted">Todavía no hay cierres de caja guardados.</p>
+              )}
             </div>
-          )}
+            <button className="btn-primary btn-sm" onClick={() => setShowOpen(true)}>
+              🔓 Abrir caja
+            </button>
+          </div>
           {last && (
             <section className="card">
               <div className="panel-head">

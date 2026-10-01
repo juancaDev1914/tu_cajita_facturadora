@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import BarChart from '../components/BarChart.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDate, addDays, startOfWeek, startOfQuarter, WEEKDAYS_SHORT, MONTHS_SHORT, startOfDay } from '../utils/format.js'
+import { summarizeProfit } from '../utils/profit.js'
 
 function completedInRange(sales, from, to) {
   return sales.filter((s) => {
@@ -24,7 +25,7 @@ function pctDiff(cur, prev) {
 }
 
 export default function DashboardView() {
-  const { sales } = useStore()
+  const { sales, products } = useStore()
   const [period, setPeriod] = useState('semana')
 
   const data = useMemo(() => {
@@ -117,6 +118,8 @@ export default function DashboardView() {
   const pct = pctDiff(data.cur, data.prev)
   const avgCur = data.curList.length ? data.cur / data.curList.length : 0
   const units = countUnits(data.curList)
+  // Ganancia del período: total cobrado menos el costo de lo vendido
+  const profit = useMemo(() => summarizeProfit(data.curList, { products }), [data.curList, products])
   return (
     <>
       <div className="dash-head">
@@ -145,6 +148,11 @@ export default function DashboardView() {
         </div>
         <div className="kpi-card"><span>🎫 Ticket promedio</span><strong>{formatMoney(Math.round(avgCur))}</strong></div>
         <div className="kpi-card"><span>📦 Unidades vendidas</span><strong>{units}</strong></div>
+        <div className="kpi-card">
+          <span>🏆 Ganancia del período</span>
+          <strong className={profit.profit >= 0 ? 'up' : 'down'}>{formatMoney(Math.round(profit.profit))}</strong>
+          <small className="muted">Costo: {formatMoney(Math.round(profit.cost))} · {profit.margin.toFixed(1)}% margen</small>
+        </div>
       </div>
 
       <div className="panel">

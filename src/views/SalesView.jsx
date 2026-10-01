@@ -1,18 +1,28 @@
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
+import ConfirmPaymentModal from '../components/ConfirmPaymentModal.jsx'
+import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDateTime, paymentLabel, saleNumberToString } from '../utils/format.js'
 
 export default function SalesView({ owner = null, canVoid = false }) {
-  const { sales, voidSale, settings } = useStore()
+  const { sales, voidSale, settings, cancelPendingSale, issueElectronicInvoice } = useStore()
   const payMethods = settings?.paymentMethods
 
   const [search, setSearch] = useState('')
   const [fromStr, setFromStr] = useState('')
   const [toStr, setToStr] = useState('')
   const [status, setStatus] = useState('todas')
-  const [detail, setDetail] = useState(null)
+  // Se guarda el id para que el detalle se actualice al confirmar un pago / emitir la FE
+  const [detailId, setDetailId] = useState(null)
   const [confirmVoid, setConfirmVoid] = useState(null)
+  const [confirmPay, setConfirmPay] = useState(null)
+  const [cancelPending, setCancelPending] = useState(null)
+  // Edición de productos de una factura pendiente (se guarda por id para ver los datos frescos)
+  const [editPendingId, setEditPendingId] = useState(null)
+
+  const detail = detailId ? sales.find((s) => s.id === detailId) || null : null
+  const editPending = editPendingId ? sales.find((s) => s.id === editPendingId) || null : null
 
   const filtered = useMemo(() => {
     const from = fromStr ? new Date(fromStr + 'T00:00:00') : null
@@ -41,6 +51,8 @@ export default function SalesView({ owner = null, canVoid = false }) {
     (s, x) => s + (x.status === 'completada' ? x.items.reduce((a, i) => a + i.qty, 0) : 0),
     0,
   )
+  const pendingRows = filtered.filter((s) => s.status === 'pendiente')
+  const pendingTotal = pendingRows.reduce((s, x) => s + x.total, 0)
 
   const applyQuick = (days) => {
     const d = new Date()
@@ -62,6 +74,7 @@ export default function SalesView({ owner = null, canVoid = false }) {
         <input type="date" className="input" value={toStr} onChange={(e) => setToStr(e.target.value)} aria-label="Hasta" />
         <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="todas">Todas</option>
+          <option value="pendiente">⏳ Pendientes de pago</option>
           <option value="completada">Completadas</option>
           <option value="anulada">Anuladas</option>
         </select>
@@ -82,6 +95,11 @@ export default function SalesView({ owner = null, canVoid = false }) {
         <div className="kpi-card"><span>🧾 Ventas en filtro</span><strong>{filtered.length}</strong></div>
         <div className="kpi-card"><span>💰 Ingresos (completadas)</span><strong>{formatMoney(shownTotal)}</strong></div>
         <div className="kpi-card"><span>📦 Unidades vendidas</span><strong>{shownUnits}</strong></div>
+        <div className="kpi-card warn">
+          <span>⏳ Pendientes por cobrar</span>
+          <strong>{formatMoney(pendingTotal)}</strong>
+          <small>{pendingRows.length} factura(s)</small>
+        </div>
       </div>
 
       <table className="table">
@@ -109,14 +127,25 @@ export default function SalesView({ owner = null, canVoid = false }) {
               <td>{s.customer || '—'}</td>
               <td>{s.items.reduce((a, i) => a + i.qty, 0)}</td>
               <td><strong>{formatMoney(s.total)}</strong></td>
-              <td>{paymentLabel(s.paymentMethod, payMethods)}</td>
+              <td>{s.status === 'pendiente' ? '—' : paymentLabel(s.paymentMethod, payMethods)}</td>
               <td>
-                <span className={`badge ${s.status === 'completada' ? 'ok' : 'danger'}`}>
-                  {s.status === 'completada' ? 'Completada' : 'Anulada'}
+                <span
+                  className={`badge ${s.status === 'completada' ? 'ok' : s.status === 'pendiente' ? 'warn' : 'danger'}`}
+                >
+                  {s.status === 'completada' ? 'Completada' : s.status === 'pendiente' ? '⏳ Pendiente' : 'Anulada'}
                 </span>
               </td>
               <td className="td-right">
-                <button className="btn-ghost btn-sm" onClick={() => setDetail(s)}>👁️ Ver</button>
+                <button className="btn-ghost btn-sm" onClick={() => setDetailId(s.id)}>👁️ Ver</button>
+                {s.status === 'pendiente' && (
+                  <button className="btn-ghost btn-sm" onClick={() => setEditPendingId(s.id)}>✏️ Editar</button>
+                )}
+                {s.status === 'pendiente' && (
+                  <button className="btn-ghost btn-sm" onClick={() => setConfirmPay(s)}>💳 Cobrar</button>
+                )}
+                {s.status === 'pendiente' && (
+                  <button className="btn-ghost btn-sm" onClick={() => setCancelPending(s)}>✖️ Cancelar</button>
+                )}
                 {canVoid && s.status === 'completada' && (
                   <button className="btn-ghost btn-sm danger" onClick={() => setConfirmVoid(s)}>↩️ Anular</button>
                 )}
@@ -130,14 +159,45 @@ export default function SalesView({ owner = null, canVoid = false }) {
       </table>
 
       {detail && (
-        <Modal title={`🧾 Factura N° ${formatNumberToString(detail.number)}`} onClose={() => setDetail(null)} size="md"
-          footer={<button className="btn-primary" onClick={() => setDetail(null)}>Cerrar</button>}
+        <Modal
+          title={`🧾 Factura N° ${formatNumberToString(detail.number)}`}
+          onClose={() => setDetailId(null)}
+          size="lg"
+          footer={
+            <>
+              {detail.status === 'pendiente' && (
+                <button
+                  className="btn-ghost"
+                  onClick={() => {
+                    setDetailId(null)
+                    setEditPendingId(detail.id)
+                  }}
+                >
+                  ✏️ Editar productos
+                </button>
+              )}
+              {detail.status === 'pendiente' && (
+                <button className="btn-primary" onClick={() => setConfirmPay(detail)}>
+                  💳 Cobrar y emitir FE
+                </button>
+              )}
+              <button className="btn-ghost" onClick={() => setDetailId(null)}>Cerrar</button>
+            </>
+          }
         >
           <div className="detail-grid">
             <p><strong>Fecha:</strong> {fmtDateTime(new Date(detail.date))}</p>
             <p><strong>Cajero:</strong> {detail.cashier}</p>
             <p><strong>Cliente:</strong> {detail.customer || '—'}</p>
-            <p><strong>Pago:</strong> {paymentLabel(detail.paymentMethod, payMethods)}</p>
+            <p>
+              <strong>Pago:</strong>{' '}
+              {detail.status === 'pendiente' ? '⏳ Pendiente de pago' : paymentLabel(detail.paymentMethod, payMethods)}
+            </p>
+            {detail.status === 'pendiente' && (
+              <p>
+                <strong>Estado:</strong> <span className="badge warn">⏳ Pendiente de pago</span>
+              </p>
+            )}
           </div>
           <table className="table compact">
             <thead>
@@ -167,6 +227,29 @@ export default function SalesView({ owner = null, canVoid = false }) {
               <p className="badge danger">Anulada {detail.annulledAt ? fmtDateTime(new Date(detail.annulledAt)) : ''}</p>
             )}
           </div>
+
+          {/* Factura electrónica: solo se emite con pago confirmado */}
+          {detail.eInvoice ? (
+            <div className="fe-box">
+              <strong>🧾 Factura electrónica</strong>
+              <span>
+                {detail.eInvoice.number} · emitida {fmtDateTime(new Date(detail.eInvoice.issuedAt))}
+              </span>
+              <code>CUFE: {detail.eInvoice.cuufe}</code>
+            </div>
+          ) : detail.status === 'pendiente' ? (
+            <p className="pay-note warn">
+              ⏳ Pago pendiente: la factura electrónica se emitirá al confirmar el cobro.
+            </p>
+          ) : detail.status === 'completada' ? (
+            <div className="fe-box warn">
+              <strong>🧾 Factura electrónica pendiente de emisión</strong>
+              <span>Venta registrada sin FE (anterior a activar este flujo).</span>
+              <button className="btn-ghost btn-sm" onClick={() => issueElectronicInvoice(detail.id)}>
+                🧾 Emitir ahora
+              </button>
+            </div>
+          ) : null}
         </Modal>
       )}
 
@@ -192,6 +275,40 @@ export default function SalesView({ owner = null, canVoid = false }) {
             <strong>{formatMoney(confirmVoid.total)}</strong>?
           </p>
           <p className="muted">Los productos se devolverán al inventario automáticamente.</p>
+        </Modal>
+      )}
+
+      {confirmPay && <ConfirmPaymentModal sale={confirmPay} onClose={() => setConfirmPay(null)} />}
+
+      {editPending && (
+        <EditPendingSaleModal sale={editPending} onClose={() => setEditPendingId(null)} />
+      )}
+
+      {cancelPending && (
+        <Modal
+          title="✖️ Cancelar factura pendiente"
+          onClose={() => setCancelPending(null)}
+          size="sm"
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => setCancelPending(null)}>Cancelar</button>
+              <button
+                className="btn-danger"
+                onClick={() => {
+                  cancelPendingSale(cancelPending.id)
+                  setCancelPending(null)
+                }}
+              >
+                Sí, cancelar
+              </button>
+            </>
+          }
+        >
+          <p>
+            ¿Cancelar la factura pendiente <strong>N° {formatNumberToString(cancelPending.number)}</strong> por{' '}
+            <strong>{formatMoney(cancelPending.total)}</strong>?
+          </p>
+          <p className="muted">Los productos vuelven al inventario y no se emite factura electrónica.</p>
         </Modal>
       )}
     </>

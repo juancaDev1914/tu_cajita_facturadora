@@ -8,12 +8,12 @@ import { cashSessionSummary } from '../utils/cash.js'
  * variant="bar" para la vista de caja, variant="inline" para la cabecera del punto de venta.
  */
 export default function CashBar({ onRequestOpen, onRequestClose, variant = 'bar' }) {
-  const { cash, sales, settings } = useStore()
+  const { cash, sales, products, settings } = useStore()
   const session = cash?.open
 
   const summary = useMemo(
-    () => (session ? cashSessionSummary({ sales, session, settings }) : null),
-    [sales, session, settings],
+    () => (session ? cashSessionSummary({ sales, session, settings, products }) : null),
+    [sales, session, settings, products],
   )
 
   const who = session?.openedBy || ''

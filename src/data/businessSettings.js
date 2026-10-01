@@ -44,6 +44,8 @@ export const DEFAULT_SETTINGS = {
   // Efectivo inicial sugerido al abrir la caja
   defaultOpeningCash: 0,
   saleTypes: [{ id: 'mostrador', label: 'Mostrador' }],
+  // Periodicidad con la que se calcula la nómina: dia | semana | quincena | mes
+  payrollPeriod: 'mes',
   modules: ['pos', 'caja', 'inventario', 'historial', 'reportes', 'dashboard', 'deudas', 'nomina', 'usuarios'],
   setupCompleted: false,
 }

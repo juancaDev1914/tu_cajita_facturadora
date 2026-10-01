@@ -192,6 +192,7 @@ Elementos UI compartidos entre vistas:
 - Control de stock en tiempo real
 - Alertas de stock bajo
 - Cálculo automático de cambio
+- **Cantidad manual** — Toca la cantidad en el carrito y escríbela con el teclado numérico (también con los botones −/+); se ajusta sola entre 1 y el stock disponible
 - Ticket con todos los detalles
 
 ---
@@ -237,6 +238,9 @@ Elementos UI compartidos entre vistas:
 - 🔍 **Búsqueda:** Por número de factura, cliente, cajero
 - 📅 **Filtros:** Por rango de fechas, método de pago
 - 📊 **Detalle:** Ver todos los items de cada venta
+- ⏳ **Ventas pendientes:** Deja una venta sin cobrar y sigue con otras; al confirmar el pago se emite la factura electrónica
+- ✏️ **Edición de pendientes:** Agrega, quita o cambia productos y el descuento de una factura pendiente (Historial → *Editar* o POS → ⏳ Pendientes → *Editar*); el stock y el total se recalculan al guardar
+- 💸 **Aviso de cambio:** Al cobrar en efectivo, la notificación del cambio a devolver se queda 15 segundos en pantalla (se puede tocar para cerrarla antes)
 - ⚠️ **Anulación:** Solo administradores pueden anular ventas (restaura el stock automáticamente)
 
 **Estructura de una venta:**
@@ -252,12 +256,29 @@ Elementos UI compartidos entre vistas:
   subtotal: 15000,            // Subtotal sin descuentos
   discountPct: 10,            // Porcentaje de descuento
   total: 13500,               // Total final
-  paymentMethod: "efectivo",  // Medio de pago
+  paymentMethod: "efectivo",  // Medio de pago (null mientras esté pendiente)
   received: 15000,            // Efectivo recibido (si aplica)
   change: 1500,               // Cambio a devolver
-  status: "completada",       // Estado: completada / anulada
+  status: "completada",       // Estado: pendiente / completada / anulada
+  paidAt: "...",              // Confirmación del pago (si aplica)
+  pendingSince: "...",        // Desde cuándo está pendiente (si aplica)
+  eInvoice: {                 // Factura electrónica (solo con pago confirmado)
+    number: "FE-000001",
+    issuedAt: "...",
+    cuufe: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    status: "emitida"
+  },
   pendingSync: false          // ¿Pendiente de sincronización?
 }
+```
+
+**Flujo de facturación electrónica:**
+
+```
+Cobrar ahora (✅ Confirmar venta)  ──► status: completada + eInvoice emitida
+Dejar sin cobrar (⏸ Dejar pendiente) ──► status: pendiente (stock reservado, SIN FE)
+     └─ luego: 💳 Cobrar (POS / Historial) ──► status: completada + eInvoice emitida
+     └─ o:    ✖️ Cancelar ──► status: anulada + stock devuelto (sin FE)
 ```
 
 ---
@@ -275,6 +296,16 @@ Elementos UI compartidos entre vistas:
 | **Top productos** | Productos más vendidos |
 | **Medios de pago** | Distribución por tipo de pago |
 | **Comparativas** | Comparación con período anterior |
+| **Ganancia total** | Utilidad de los productos vendidos (precio − costo) en el rango |
+| **Ganancia por producto** | Unidades, ingresos, costo, utilidad y margen de cada producto |
+| **Cuánto queda en base** | Ganancia − nómina pagada en el rango − deudas por pagar |
+
+> **Cómo se calcula la ganancia:** cada venta congela el `cost` del producto en sus
+> items al momento de cobrarse, así la utilidad histórica no cambia si después se
+> edita el costo en el inventario. Las ventas anteriores a esta versión (o las de
+> la demo) usan el costo actual del catálogo como respaldo. El descuento de la
+> venta se reparte entre los items proporcionalmente, para que la utilidad por
+> producto sea real.
 
 **Opciones de exportación:**
 
@@ -292,6 +323,7 @@ Elementos UI compartidos entre vistas:
 - 📊 **Mensuales** — Resumen del mes en curso
 - 📊 **Trimestrales** — Vista a mayor escala
 - 🔄 **Comparación** — vs. período anterior (semana/mes/trimestre)
+- 🏆 **Ganancia del período** — Utilidad (ingresos − costo de lo vendido) con su margen %
 
 ---
 
@@ -310,37 +342,125 @@ Elementos UI compartidos entre vistas:
 
 - Crear registros de deudas
 - Editar montos y fechas
+- 💵 **Abonos parciales** — Registra pagos parciales de una deuda del negocio *o* de una cuenta por cobrar (botón *💵 Abonar* en cada fila): monto, fecha y nota opcional
+- 📊 **Progreso por deuda** — Barra de abonado con porcentaje y cuánto falta; al completar el monto la deuda pasa sola a *Pagada / Cobrada*
+- 🗑️ **Quitar abonos** — Desde el mismo modal puedes borrar un abono mal digitado (y el estado se revierte)
 - Eliminar registros
-- **Balance neto** — Diferencia entre por cobrar y por pagar
+- **Balance neto** — Diferencia entre por cobrar y por pagar (los saldos ya descuentan los abonos)
 
 ---
 
-### 👥 7. Nómina
+### 💰 7. Apertura y cierre de caja (arqueo)
+
+**Descripción:** Una sola caja para todo el negocio. Se abre con el efectivo inicial
+y se cierra con el arqueo (dinero contado). Cada venta guarda su `sessionId`, así
+que todas las ventas de la sesión entran en el mismo arqueo.
+
+**Al cerrar la caja (modal de arqueo) se registra:**
+
+| Campo | Para qué sirve |
+|-------|----------------|
+| Efectivo inicial | Dinero con el que se abrió el cajón |
+| Ventas en el cajón | Solo los medios de pago físicos (lo de tarjeta/transferencia no está en el cajón) |
+| **Retiros / egresos** | Entregas al patrón, pagos con dinero de la caja |
+| Ingresos extra | Recargas, pago de fiado en efectivo, etc. |
+| Dinero contado | Lo que realmente hay en el cajón → calcula faltante/sobrante |
+| **Base para el día siguiente** | Cuánta plata se deja en el cajón para abrir mañana |
+
+```
+DEBE HABER = Efectivo inicial + Ventas en el cajón + Ingresos extra − Retiros
+```
+
+> **⚠️ "Otros medios" en $0 no significa que no hubo transferencias.** La tarjeta
+> *🏦 Otros medios* suma únicamente los medios que están **fuera** del cajón. Si
+> *Transferencia* o *Nequi* aparecen en $0, es que en
+> *Configuración → Caja* están marcados como “entra al cajón” y por eso su plata
+> se cuenta en *Efectivo en el cajón* (y termina pedindo más efectivo en el
+> arqueo). Desmárcalos si ese dinero va a una cuenta o billetera. El modal y la
+> pantalla de Configuración avisan cuando esa configuración no cuadra, y el
+> desglose por medio de pago muestra el **total facturado** y cuánto quedó por
+> fuera del cajón.
+
+> **Base del día siguiente:** el monto que se anote **no altera el arqueo**. Solo
+> dice cuánta plata queda en el cajón del resto de la que se entrega:
+>
+> ```
+> EFECTIVO QUE SE ENTREGA = Dinero contado − Base para el día siguiente
+> ```
+>
+> El modal trae atajos (*igual al inicial*, *dejar todo*, *sin base*) y al
+> abrir la caja al día siguiente propone como efectivo inicial la base del último
+> cierre, para no arrancar el día adivinando. El valor queda guardado en el
+> historial de cierres y sale en el reporte imprimible y en el CSV.
+
+**Ganancia en la caja:** el modal y la vista Caja muestran la **ganancia de los
+productos vendidos en la sesión** (precio de venta − costo), con su margen, y el
+detalle **producto por producto** (unidades, costo y ganancia de cada uno). Usa la
+misma lógica de `utils/profit.js` que Reportes, así que el costo congelado en cada
+venta manda y el descuento se reparte proporcionalmente.
+
+El resumen (incluidos `profit`, `cost`, `nextOpeningCash` y el detalle por producto)
+queda **congelado en el historial** de cierres, y también sale en el reporte
+imprimible y en el CSV de cierres.
+
+---
+
+### 👥 8. Nómina
 
 **Descripción:** Sistema de cálculo de pagos a empleados.
 
 **Cómo funciona:**
 
 ```
-Salario Total = Salario Base + (Ventas del Mes × Porcentaje de Comisión)
+Salario Total = Base del Período + (Ventas del Período × Porcentaje de Comisión)
 ```
+
+**Periodicidad (día / semana / quincena / mes):**
+
+La vista Nómina tiene pestañas para calcular la nómina por **Diario**, **Semanal**,
+**Quincenal** o **Mensual**, con navegación ◀ Anterior / Actual / Siguiente ▶ y el
+selector de fecha o mes según el período.
+
+El salario base se guarda como **mensual**, así que en día, semana y quincena se
+**prorratea** por los días que cubre el período sobre los días del mes. Sumar todos
+los períodos de un mes da exactamente el salario base completo:
+
+| Período | Fracción del mes (mes de 30 días) | Base de $1.300.000 |
+|---------|----------------------------------|--------------------|
+| Diario | 1/30 (3,3%) | $43.333 |
+| Semanal | 7/30 (23,3%) | $303.333 |
+| Quincenal | 15/30 (50%) | $650.000 |
+| Mensual | 100% | $1.300.000 |
+
+La comisión siempre es del período: se calcula sobre las ventas **completadas**
+dentro del rango de fechas. En *Configuración → Nómina* se elige con qué período
+arranca la vista (la pestaña siempre se puede cambiar ahí mismo).
+
+Cada pago se guarda con una llave de período (`period`): `dia:2026-09-30`,
+`semana:2026-09-28`, `quincena:2026-09-2`, `mes:2026-09`. Los pagos antiguos
+(mensuales) se siguen leyendo y no se pierden.
 
 **Configuración por usuario:**
 
 | Campo | Descripción |
 |-------|-------------|
-| `baseSalary` | Salario base mensual (COP) |
-| `commissionPct` | Porcentaje de comisión sobre ventas (%) |
+| `baseSalary` | Salario base mensual (COP), se prorratea según el período |
+| `commissionPct` | Porcentaje de comisión sobre ventas del período (%) |
 
-**Ejemplo:**
+**Ejemplo (mensual):**
 - Salario base: $1,300,000
 - Comisión: 1.5%
 - Ventas del mes: $20,000,000
 - **Total a pagar:** $1,300,000 + ($20,000,000 × 0.015) = **$1,600,000**
 
+**Ejemplo (quincenal, mismo vendedor):**
+- Base prorrateada: $1,300,000 × 50% = $650,000
+- Ventas de la quincena: $8,000,000 → comisión $120,000
+- **Total a pagar:** **$770,000**
+
 ---
 
-### 👤 8. Usuarios
+### 👤 9. Usuarios
 
 **Descripción:** Administración completa de cuentas de usuario.
 
@@ -424,7 +544,30 @@ La aplicación implementa dos roles con diferentes niveles de acceso:
 |----------------|-----|----------|
 | **IndexedDB** | Datos principales de la aplicación | Persistente (queda hasta que se borre) |
 | **sessionStorage** | Sesión del usuario actual | Temporal (se mantiene en la pestaña) |
-| **localStorage** | Migración desde versiones anteriores | Persistente (usado solo para migración) |
+| **localStorage** (`cajita_pos_backup_v1`) | Copia del estado completo | Persistente (segunda capa local) |
+| **localStorage** (`cajita_pos_sales_guard`) | **Red de seguridad de las ventas** | Persistente |
+
+### Protección del historial de ventas
+
+Las ventas son el dato más valioso del negocio y, al vivir en el navegador, no
+se pueden recuperar si se borra el almacenamiento. Por eso la app las cuida en
+cuatro puntos:
+
+1. **Red de seguridad automática.** Cada autoguardado escribe una copia de las
+   ventas en `localStorage` (`cajita_pos_sales_guard`). Si al arrancar el estado
+   principal aparece *sin* ventas pero esta copia sí las tiene, se restauran
+   automáticamente (cubre fallos de IndexedDB y borrados accidentales del
+   almacenamiento). También se recalcula `nextInvoice` para no repetir números
+   de factura.
+2. **El asistente de configuración nunca destruye datos.** `completeSetup()`
+   conserva ventas, inventario, deudas, nómina, cierres y la numeración; solo
+   crea el usuario admin si no existe ninguno. Antes sí ponía todo en `[]`.
+3. **El borrado manual es explícito.** *Zona de peligro → Borrar todos los
+   datos* muestra cuántos productos y ventas se van a eliminar, avisa que no se
+   puede deshacer y pide una confirmación adicional con el número exacto.
+4. **Respalso manual.** El botón *💾 Descargar respaldo* exporta todo a un JSON.
+   Es la única forma de llevar los datos a otro equipo o de protegerlos si se
+   borra el navegador. Conviene hacerlo periódicamente.
 
 ### Estructura de Datos en IndexedDB
 
@@ -452,24 +595,37 @@ La aplicación incluye migración automática desde versiones anteriores:
    - `cajita_pos_state_v2`
    - `cajita_pos_data_v1`
 3. Si encuentra datos legacy, los migra a IndexedDB
-4. Si no hay datos, inicializa con datos de demostración
+4. Si no hay datos, deja el estado vacío (en producción entra el asistente de
+   configuración; en **desarrollo** se auto-cargan los datos de prueba, ver abajo)
 
-### Datos de Demostración
+### Datos de Demostración (solo desarrollo)
 
-Al primera ejecución, la aplicación crea automáticamente:
+> ⚠️ Estos datos **solo existen en `npm run dev`**. Todo está protegido con
+> `import.meta.env.DEV`, por lo que `npm run build` elimina el módulo
+> `src/data/devSeed.js` del bundle: producción **nunca** los verá.
 
-**Productos iniciales (18 productos):**
+Formas de cargarlos:
 
-| Categoría | Ejemplos |
-|-----------|----------|
-| Despensa | Arroz, Pasta, Aceite, Lentejas, Azúcar, Café |
-| Panadería | Pan Tajado Blanco |
-| Lácteos & Refrigerados | Huevos AA, Queso Campesino, Yogurt |
-| Bebidas | Gaseosa, Agua, Jugo, Cerveza |
-| Snacks | Papas Fritas, Chocorramo |
-| Aseo | Detergente, Jabón |
+1. **Automática** — `npm run dev` con la base del navegador vacía (primer arranque).
+2. **Botón** — Configuración → Zona de peligro → 🧪 *Cargar datos demo*
+   (permite "Agregar sin borrar" o "Reemplazar todo").
+3. **Consola** — `__cargarDatosDemo()` (reemplaza todo) o
+   `__cargarDatosDemo(false)` (agrega sin borrar).
 
-**Ventas generadas:** ~120 días de ventas históricas con patrón realista (más ventas fines de semana).
+**Qué crea:**
+
+| Dato | Detalle |
+|------|---------|
+| Usuarios | `admin` / `admin123` + 4 cajeros (`cajero1..4` / `cajero123`) |
+| Productos (18) | Despensa 🍚, Panadería 🍞, Lácteos 🥛, Bebidas 🥤, Snacks 🍟, Aseo 🧼 (2 con stock bajo) |
+| Ventas | ~120 días con patrón realista (más ventas fines de semana), 3 pendientes de pago y 2 anuladas |
+| Deudas | 5 registros (por cobrar / por pagar) |
+| Nómina | Pago del mes anterior para cada cajero |
+| Caja | 5 sesiones ya cerradas (una con faltante de arqueo) |
+| Configuración | Negocio "Mi Tienda Demo" con todos los módulos activos |
+
+Para probar el asistente de configuración inicial, borra el almacenamiento de la
+app en DevTools (Application → Storage → Clear site data).
 
 ---
 
@@ -658,6 +814,8 @@ cajita_faturadora/
 │   │
 │   ├── utils/                   # Utilidades
 │   │   ├── format.js            # Formato de dinero, fechas, CSV
+│   │   ├── profit.js            # Ganancia: costo vs. precio de lo vendido
+│   │   ├── payroll.js           # Períodos de nómina (día/semana/quincena/mes)
 │   │   └── auth.js              # Hash de contraseñas, roles
 │   │
 │   └── views/                   # Vistas / Módulos principales
@@ -754,6 +912,10 @@ Los estilos están en `src/index.css`. Puedes modificar:
 - Tipografías
 - Espaciados y layout
 - Componentes visuales
+
+**Modales:** ocupan toda la pantalla en móvil (`height: 100dvh`) con cabecera fija arriba,
+botones abajo y solo el contenido deslizable; en escritorio (≥768px) se convierten en un
+diálogo centrado con anchos por tamaño: `sm` 480px, `md` 780px, `lg` 1040px, `xl` 1280px.
 
 ---
 
@@ -999,7 +1161,10 @@ fmtDateTime(new Date())   // "19/09/2026 14:30"
 
 ### Resetear Datos de Demostración
 
-Desde el código, existe la función `resetDemo()` en StoreContext que restaura los productos y ventas iniciales.
+Solo en desarrollo: en Configuración → Zona de peligro → 🧪 *Cargar datos demo*, o
+desde la consola del navegador con `__cargarDatosDemo()` (reemplaza todo) /
+`__cargarDatosDemo(false)` (agrega sin borrar). En producción ese botón y la
+función no existen.
 
 ---
 
