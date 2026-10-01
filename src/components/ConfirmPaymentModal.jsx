@@ -10,7 +10,7 @@ const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
  * Confirma el pago de una venta PENDIENTE y, al hacerlo, emite la factura
  * electrónica. Se usa desde el POS (lista de pendientes) y del Historial.
  */
-export default function ConfirmPaymentModal({ sale, onClose }) {
+export default function ConfirmPaymentModal({ sale, onClose, onPaid }) {
   const { confirmSalePayment, settings, cashOpen, requireOpenCash } = useStore()
   const methods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
   const cashModuleOn = !Array.isArray(settings?.modules) || settings.modules.includes('caja')
@@ -33,7 +33,11 @@ export default function ConfirmPaymentModal({ sale, onClose }) {
       paymentMethod: method,
       received: cashMethod ? received : total,
     })
-    if (done) onClose?.()
+    if (done) {
+      onClose?.()
+      // El POS (y el Historial) usan esto para mostrar el ticket ya con la FE
+      onPaid?.(done)
+    }
   }
 
   return (

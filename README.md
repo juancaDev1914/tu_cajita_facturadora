@@ -210,6 +210,7 @@ Elementos UI compartidos entre vistas:
 | **Eliminar producto** | Remover producto del inventario (con confirmación) |
 | **Consultar ganancias** | Ver margen estimado por producto (precio - costo) |
 | **Alertas de stock** | Indicadores visuales cuando el stock está por debajo del mínimo |
+| **📦 Reabastecer** | Botón por producto (o de varios a la vez) para **sumar** unidades que ya están en el inventario: atajos +1/+5/+10/+24/+50, ajuste del costo de compra y nota de la entrada |
 
 **Campos de un producto:**
 
@@ -239,7 +240,9 @@ Elementos UI compartidos entre vistas:
 - 📅 **Filtros:** Por rango de fechas, método de pago
 - 📊 **Detalle:** Ver todos los items de cada venta
 - ⏳ **Ventas pendientes:** Deja una venta sin cobrar y sigue con otras; al confirmar el pago se emite la factura electrónica
-- ✏️ **Edición de pendientes:** Agrega, quita o cambia productos y el descuento de una factura pendiente (Historial → *Editar* o POS → ⏳ Pendientes → *Editar*); el stock y el total se recalculan al guardar
+- ✏️ **Edición de pendientes:** Agrega, quita o cambia productos, el descuento y el nombre del cliente de una factura pendiente (Historial → *Editar* o POS → ⏳ Pendientes → *Editar*); el stock y el total se recalculan al guardar
+- 📦 **Stock en las pendientes:** Una factura pendiente descuenta el inventario desde que se registra (la mercadería queda reservada aunque esté fiada); si se cancela, el stock vuelve al inventario
+- 🖨️ **Ticket tras cobrar:** Al confirmar el pago de una factura pendiente se muestra el ticket con la factura electrónica, listo para imprimir (POS e Historial)
 - 💸 **Aviso de cambio:** Al cobrar en efectivo, la notificación del cambio a devolver se queda 15 segundos en pantalla (se puede tocar para cerrarla antes)
 - ⚠️ **Anulación:** Solo administradores pueden anular ventas (restaura el stock automáticamente)
 
@@ -547,8 +550,36 @@ La aplicación implementa dos roles con diferentes niveles de acceso:
 | **localStorage** (`cajita_pos_backup_v1`) | Copia del estado completo | Persistente (segunda capa local) |
 | **localStorage** (`cajita_pos_sales_guard`) | **Red de seguridad de las ventas** | Persistente |
 
-### Protección del historial de ventas
+### Datos a salvo al actualizar la app (despliegue en Vercel)
 
+**Un despliegue no borra los datos.** Todo se guarda en el navegador del usuario
+(IndexedDB + localStorage), así que publicar código nuevo en Vercel no toca ni un
+byte de las ventas. Aun así hay riesgos reales, y la app los cubre:
+
+1. **Aviso de actualización.** Cada compilación genera un `version.json` con un
+   identificador único. Al detectar un despliegue nuevo, la app **guarda una
+   copia completa de los datos** y muestra un modal con el resumen de lo que hay
+   a salvo (ventas, productos, deudas, nómina) y botones para descargar el
+   respaldo, hacer otra copia o **restaurar la anterior**.
+2. **Nunca se actualiza a mitad de venta.** El service worker ya no hace
+   `skipWaiting()` al instalarse: si lo hiciera, cambiaría el código bajo los pies
+   del usuario mientras cobra. Ahora solo avisa (`cajita:actualizacion-lista`) y
+   es el modal quien decide cuándo recargar.
+3. **Protección contra versiones viejas.** `SCHEMA_VERSION` viaja junto a los
+   datos. Si alguien abre una versión **más antigua** que la que guardó sus datos,
+   la app **se bloquea** con una alerta en vez de cargar el estado incompleto (que
+   al guardar podría pisar campos nuevos). Solo se desbloquea recargando.
+4. **Copias de seguridad automáticas.** Hasta 3 snapshots en
+   `cajita_pos_safety_snapshots`. Si el almacenamiento está lleno y no cabe la
+   copia completa, se guarda una parcial con **lo irrecuperable** (las ventas,
+   los usuarios y la configuración del negocio).
+5. **`version.json` nunca se cachea** en el service worker: sin eso, la app
+   creería estar actualizada cuando no lo está.
+6. **Pruebas.** `npm test` cubre el versionado de datos y las copias de seguridad
+   (`scripts/test-safety.mjs`) y la lógica de stock (`scripts/test-stock.mjs`).
+
+
+### Protección del historial de ventas
 Las ventas son el dato más valioso del negocio y, al vivir en el navegador, no
 se pueden recuperar si se borra el almacenamiento. Por eso la app las cuida en
 cuatro puntos:

@@ -122,6 +122,7 @@ export function buildDemoState() {
   return {
     products,
     sales,
+    stockEntries: [],
     nextInvoice,
     users,
     debts: demoDebts(today),

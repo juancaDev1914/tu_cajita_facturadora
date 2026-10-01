@@ -14,6 +14,9 @@ export default function EditPendingSaleModal({ sale, onClose }) {
   const { products, updatePendingSaleItems } = useStore()
   const [items, setItems] = useState(() => (sale.items || []).map((i) => ({ ...i })))
   const [discountPct, setDiscountPct] = useState(Number(sale.discountPct) || 0)
+  // Cliente y cajero editables: una factura guardada sin nombre se completa aquí
+  const [customer, setCustomer] = useState(sale.customer || '')
+  const [cashier, setCashier] = useState(sale.cashier || '')
   const [search, setSearch] = useState('')
   const itemsRef = useRef(null)
 
@@ -66,11 +69,13 @@ export default function EditPendingSaleModal({ sale, onClose }) {
   const hasChanges =
     items.length !== (sale.items || []).length ||
     items.some((i) => i.qty !== (sale.items || []).find((x) => x.productId === i.productId)?.qty) ||
-    (Number(discountPct) || 0) !== (Number(sale.discountPct) || 0)
+    (Number(discountPct) || 0) !== (Number(sale.discountPct) || 0) ||
+    customer.trim() !== (sale.customer || '') ||
+    (cashier.trim() && cashier.trim() !== (sale.cashier || ''))
 
   const save = () => {
     if (!items.length) return
-    const res = updatePendingSaleItems(sale.id, { items, discountPct })
+    const res = updatePendingSaleItems(sale.id, { items, discountPct, customer, cashier })
     if (res?.ok) onClose()
   }
 
@@ -89,8 +94,34 @@ export default function EditPendingSaleModal({ sale, onClose }) {
       }
     >
       <p className="pay-note warn">
-        ⏳ Factura pendiente: agrega o quita productos y el stock se reajusta al guardar. La factura
+        ⏳ Factura pendiente: edita el cliente y los productos; el stock se reajusta al guardar. La factura
         electrónica se emite recién al cobrar.
+      </p>
+      <p className="pay-note">
+        📦 El stock de estos productos <strong>ya está descontado</strong> desde que la factura se dejó pendiente
+        (por eso el catálogo muestra el stock disponible + lo reservado aquí).
+      </p>
+
+      {/* Cliente y cajero: aquí se le pone el nombre si la factura se guardó sin él */}
+      <div className="edit-sale-names">
+        <label className="edit-sale-field">
+          <span>👤 Cliente de la factura</span>
+          <input
+            className="input"
+            placeholder="Sin cliente — escribe el nombre"
+            value={customer}
+            onChange={(e) => setCustomer(e.target.value)}
+          />
+        </label>
+        <label className="edit-sale-field">
+          <span>🧑‍💼 Cajero</span>
+          <input className="input" value={cashier} onChange={(e) => setCashier(e.target.value)} />
+        </label>
+      </div>
+      <p className="pay-note">
+        {customer.trim()
+          ? `Se facturará a: ${customer.trim()}`
+          : '⚠️ Esta factura está SIN CLIENTE: escribe el nombre para saber a quién se facturó.'}
       </p>
 
       {/* Resumen SIEMPRE visible: aunque la lista crezca, contador y total no se pierden */}

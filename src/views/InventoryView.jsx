@@ -1,15 +1,18 @@
 import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
+import RestockModal, { StockEntriesList } from '../components/RestockModal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, uid } from '../utils/format.js'
 
 export default function InventoryView() {
-  const { products, addProduct, updateProduct, deleteProduct, showToast } = useStore()
+  const { products, addProduct, updateProduct, deleteProduct, stockEntries, showToast } = useStore()
 
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('Todos')
   const [form, setForm] = useState(null) // null | object
   const [confirmDelete, setConfirmDelete] = useState(null)
+  // Reabastecer: productId = esa fila; null = varios productos de una vez
+  const [restock, setRestock] = useState(undefined)
 
   const categories = useMemo(() => ['Todos', ...Array.from(new Set(products.map((p) => p.category)))], [products])
 
@@ -94,11 +97,15 @@ export default function InventoryView() {
         <div className="kpi-card danger"><span>🚫 Agotados</span><strong>{outStock.length}</strong></div>
       </div>
 
+      {/* Atajo dentro del aviso de stock bajo */}
       {lowStock.length > 0 && (
         <div className="alert-box warn">
           <strong>⚠️ Stock bajo:</strong>{' '}
           {lowStock.slice(0, 6).map((p) => `${p.name} (${p.stock})`).join(', ')}
           {lowStock.length > 6 && <> y {lowStock.length - 6} más</>}
+          <button className="btn-ghost btn-sm" onClick={() => setRestock(null)}>
+            📦 Reabastecer
+          </button>
         </div>
       )}
 
@@ -116,6 +123,9 @@ export default function InventoryView() {
             </button>
           ))}
         </div>
+        <button className="btn-ghost" onClick={() => setRestock(null)} title="Sumar mercadería a varios productos">
+          📦 Reabastecer
+        </button>
         <button className="btn-primary" onClick={() => setForm(newForm())}>＋ Nuevo producto</button>
       </div>
 
@@ -166,6 +176,14 @@ export default function InventoryView() {
                   </span>
                 </td>
                 <td className="td-right">
+                  {/* 📦 Reabastecer: suma unidades a ESTE producto que ya existe */}
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => setRestock(p.id)}
+                    title={`Agregar más stock de ${p.name}`}
+                  >
+                    📦 Reabastecer
+                  </button>
                   <button className="btn-ghost btn-sm" onClick={() => setForm(editForm(p))}>✏️ Editar</button>
                   <button className="btn-ghost btn-sm danger" onClick={() => setConfirmDelete(p)}>🗑️</button>
                 </td>
@@ -247,6 +265,12 @@ export default function InventoryView() {
             </label>
           </form>
         </Modal>
+      )}
+
+      <StockEntriesList entries={stockEntries || []} />
+
+      {restock !== undefined && (
+        <RestockModal productId={restock} onClose={() => setRestock(undefined)} />
       )}
 
       {confirmDelete && (

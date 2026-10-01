@@ -4,10 +4,11 @@ import CashBar from '../components/CashBar.jsx'
 import { OpenCashModal, CloseCashModal } from '../components/CashModals.jsx'
 import ConfirmPaymentModal from '../components/ConfirmPaymentModal.jsx'
 import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
+import SaleReceipt from '../components/SaleReceipt.jsx'
 import { QtyStepper } from '../components/QtyInput.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { haptic, TAP, SUCCESS } from '../utils/haptics.js'
-import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel } from '../utils/format.js'
+import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS } from '../utils/format.js'
 import { TOAST_LONG_MS } from '../utils/toast.js'
 
 const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
@@ -173,7 +174,8 @@ export default function POSView({ user }) {
     setReceipt(sale)
     clearCart()
     haptic(SUCCESS)
-    showToast('Venta pendiente · la factura electrónica sale al confirmar el pago', 'warning')
+    // Se aclara que el inventario ya quedó descontado aunque la venta esté fiada
+    showToast('Venta pendiente · el stock ya está descontado · la FE sale al cobrar', 'warning')
   }
 
   const receivedNum = () => Number(receiveStr) || 0
@@ -446,55 +448,7 @@ export default function POSView({ user }) {
             </>
           }
         >
-          <div className="receipt">
-            <div className="r-head">
-              <strong>{settings?.businessName || 'Mi Negocio'}</strong>
-              {settings?.address ? <span>{settings.address}</span> : null}
-              {settings?.phone ? <span>Tel: {settings.phone}</span> : null}
-            </div>
-            <div className="r-meta">
-              <span>Factura N° {saleNumber(receipt.number)}</span>
-              <span>{fmtDateTime(new Date(receipt.date))}</span>
-              <span>Cajero: {receipt.cashier}</span>
-              {receipt.customer && <span>Cliente: {receipt.customer}</span>}
-            </div>
-            <div className="r-items">
-              {receipt.items.map((it) => (
-                <div key={it.productId} className="r-line">
-                  <span className="r-name">{it.name}</span>
-                  <span className="r-qty">{it.qty} × {formatMoney(it.price)}</span>
-                  <span className="r-subtotal">{formatMoney(it.qty * it.price)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="r-totals">
-              <span>Subtotal: {formatMoney(receipt.subtotal)}</span>
-              {receipt.discountPct > 0 && (
-                <span>Descuento {receipt.discountPct}%: −{formatMoney(Math.round((receipt.subtotal * receipt.discountPct) / 100))}</span>
-              )}
-              <strong>TOTAL: {formatMoney(receipt.total)}</strong>
-              <span>
-                Pago:{' '}
-                {receipt.status === 'pendiente'
-                  ? '⏳ Pendiente de pago'
-                  : paymentLabel(receipt.paymentMethod, paymentMethods)}
-              </span>
-              {receipt.eInvoice && <span>FE: {receipt.eInvoice.number}</span>}
-              {isCashMethod(receipt.paymentMethod) && (
-                <>
-                  <span>Recibido: {formatMoney(receipt.received)}</span>
-                  <span>Cambio: {formatMoney(receipt.change)}</span>
-                </>
-              )}
-            </div>
-            <div className="r-foot">{settings?.ticketFooter || 'Gracias por su compra!'}</div>
-          </div>
-          {receipt.status === 'pendiente' && (
-            <p className="pay-note warn">
-              ⏳ Aún <strong>no</strong> hay factura electrónica: se emitirá al confirmar el pago desde el POS (⏳ Pendientes) o
-              desde el Historial de ventas.
-            </p>
-          )}
+          <SaleReceipt sale={receipt} settings={settings} />
         </Modal>
       )}
 
@@ -508,14 +462,23 @@ export default function POSView({ user }) {
           <div className="pending-list">
             {pendingSales.length === 0 && <p className="empty">No hay facturas pendientes 🎉</p>}
             {pendingSales.map((s) => (
-              <div key={s.id} className="pending-row">
+              <div key={s.id} className={`pending-row ${s.customer ? '' : 'no-customer'}`}>
                 <div className="pr-info">
-                  <strong>
+                  <strong className="pr-total">
                     Factura {saleNumber(s.number)} · {formatMoney(s.total)}
                   </strong>
-                  <span>
-                    {fmtDateTime(new Date(s.date))} · {s.customer || 'Sin cliente'} · {s.cashier}
+                  {/* El cliente se muestra grande: es lo primero que hay que ver al cobrar */}
+                  <span className={`pr-customer ${s.customer ? '' : 'missing'}`}>
+                    {s.customer ? `👤 ${s.customer}` : '⚠️ SIN CLIENTE — toca Editar y ponle el nombre'}
                   </span>
+                  <span className="pr-meta">
+                    {fmtDateTime(new Date(s.date))} · {s.cashier} · {s.items.length} prod. ·{' '}
+                    {s.items.reduce((a, i) => a + i.qty, 0)} u.
+                  </span>
+                  <small className="pr-items">
+                    {s.items.map((i) => `${i.qty}× ${i.name}`).join(' · ')}
+                  </small>
+                  <small className="pr-stock">📦 Stock ya descontado por esta factura</small>
                 </div>
                 <div className="pr-actions">
                   <button
@@ -524,6 +487,7 @@ export default function POSView({ user }) {
                       setPendingOpen(false)
                       setEditTarget(s)
                     }}
+                    title="Editar cliente, productos y descuento"
                   >
                     ✏️ Editar
                   </button>
@@ -549,11 +513,24 @@ export default function POSView({ user }) {
               </div>
             ))}
           </div>
-          <p className="pay-note">Al confirmar el cobro se emite la factura electrónica de inmediato.</p>
+          <p className="pay-note">
+            Al confirmar el cobro se emite la factura electrónica de inmediato. 📦 El stock ya está descontado desde que la
+            factura quedó pendiente; si la cancelas, el inventario se devuelve.
+          </p>
         </Modal>
       )}
 
-      {confirmPay && <ConfirmPaymentModal sale={confirmPay} onClose={() => setConfirmPay(null)} />}
+      {confirmPay && (
+        // Al cobrar una pendiente se abre el ticket con la FE ya emitida
+        <ConfirmPaymentModal
+          sale={confirmPay}
+          onClose={() => setConfirmPay(null)}
+          onPaid={(paid) => {
+            setConfirmPay(null)
+            setReceipt(paid)
+          }}
+        />
+      )}
 
       {editTarget && (
         <EditPendingSaleModal sale={editTarget} onClose={() => setEditTarget(null)} />

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import Modal from '../components/Modal.jsx'
 import ConfirmPaymentModal from '../components/ConfirmPaymentModal.jsx'
 import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
+import SaleReceipt from '../components/SaleReceipt.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDateTime, paymentLabel, saleNumberToString } from '../utils/format.js'
 
@@ -20,6 +21,8 @@ export default function SalesView({ owner = null, canVoid = false }) {
   const [cancelPending, setCancelPending] = useState(null)
   // Edición de productos de una factura pendiente (se guarda por id para ver los datos frescos)
   const [editPendingId, setEditPendingId] = useState(null)
+  // Ticket a imprimir tras confirmar el pago de una pendiente
+  const [printSale, setPrintSale] = useState(null)
 
   const detail = detailId ? sales.find((s) => s.id === detailId) || null : null
   const editPending = editPendingId ? sales.find((s) => s.id === editPendingId) || null : null
@@ -278,7 +281,34 @@ export default function SalesView({ owner = null, canVoid = false }) {
         </Modal>
       )}
 
-      {confirmPay && <ConfirmPaymentModal sale={confirmPay} onClose={() => setConfirmPay(null)} />}
+      {confirmPay && (
+        <ConfirmPaymentModal
+          sale={confirmPay}
+          onClose={() => setConfirmPay(null)}
+          // Tras cobrar, se abre el ticket con la FE para poder imprimirlo
+          onPaid={(paid) => {
+            setConfirmPay(null)
+            setDetailId(paid.id)
+            setPrintSale(paid)
+          }}
+        />
+      )}
+
+      {printSale && (
+        <Modal
+          title={`🖨️ Ticket · ${saleNumberToString(printSale.number)}`}
+          onClose={() => setPrintSale(null)}
+          size="sm"
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => setPrintSale(null)}>Cerrar</button>
+              <button className="btn-primary" onClick={() => window.print()}>🖨️ Imprimir</button>
+            </>
+          }
+        >
+          <SaleReceipt sale={printSale} settings={settings} showPendingNote={false} />
+        </Modal>
+      )}
 
       {editPending && (
         <EditPendingSaleModal sale={editPending} onClose={() => setEditPendingId(null)} />

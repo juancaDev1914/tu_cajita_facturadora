@@ -8,7 +8,18 @@ import { setCurrency } from '../utils/format.js'
 import { emptyCash, normalizeCash, cashSessionSummary } from '../utils/cash.js'
 import { emitElectronicInvoice } from '../utils/einvoice.js'
 import { TOAST_LONG_MS } from '../utils/toast.js'
-import { debtRemaining } from '../utils/debts.js'
+import { debtRemaining, deductStockForItems, restoreStockForItems } from '../utils/debts.js'
+import {
+  APP_BUILD_ID,
+  SCHEMA_VERSION,
+  isNewerSchema,
+  listSnapshots,
+  markBuildSeen,
+  readSchemaVersion,
+  seenBuild,
+  takeSnapshot,
+  writeSchemaVersion,
+} from '../utils/safety.js'
 import { isPeriodId } from '../utils/payroll.js'
 
 const SESSION_KEY = 'cajita_pos_session'
@@ -20,6 +31,7 @@ function buildEmptyState(settings = DEFAULT_SETTINGS) {
   return {
     products: [],
     sales: [],
+    stockEntries: [],
     nextInvoice: 1,
     users: [],
     debts: [],
@@ -50,6 +62,8 @@ function normalizeState(data) {
     cash: normalizeCash(data?.cash),
     products: Array.isArray(data?.products) ? data.products : [],
     sales: Array.isArray(data?.sales) ? data.sales : [],
+    // Historial de entradas de mercadería (reabastecimientos)
+    stockEntries: Array.isArray(data?.stockEntries) ? data.stockEntries : [],
     users: Array.isArray(data?.users) ? data.users : [],
     debts: Array.isArray(data?.debts) ? data.debts : [],
     payrolls: Array.isArray(data?.payrolls) ? data.payrolls : [],
@@ -142,6 +156,15 @@ export function StoreProvider({ children }) {
     try { return sessionStorage.getItem(SESSION_KEY) } catch { return null }
   })
   const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
+  // Estado de los datos ante actualizaciones:
+  //  - 'ok'         -> todo normal
+  //  - 'new-schema' -> los datos los creó una versión MÁS nueva: se bloquea
+  //  - 'updated'    -> hubo un despliegue nuevo al reiniciar
+  // El bloqueo se decide al montar: tiene que estar sabendo ANTES de que la
+  // app pueda pintar o guardar nada.
+  const [safety, setSafety] = useState(() =>
+    isNewerSchema(readSchemaVersion()) ? { status: 'new-schema' } : { status: 'ok' },
+  )
   const stateRef = useRef(null)
 
   useEffect(() => {
@@ -153,7 +176,42 @@ export function StoreProvider({ children }) {
     setCurrency(state?.settings?.currency)
   }, [state?.settings?.currency])
 
-  // Carga inicial 100% local: IndexedDB + respaldo localStorage
+  // El service worker instaló una versión nueva: se avisa para que el usuario
+  // recargue cuando quiera (nunca en mitad de una venta). Antes se guarda una
+  // copia de seguridad de los datos actuales.
+  useEffect(() => {
+    const onUpdateReady = () => {
+      const snap = takeSnapshot(stateRef.current, 'antes de actualizar')
+      setSafety((prev) =>
+        prev.status === 'new-schema' ? prev : { status: 'updated', snapshotAt: snap?.at || '' },
+      )
+    }
+    window.addEventListener('cajita:actualizacion-lista', onUpdateReady)
+    return () => window.removeEventListener('cajita:actualizacion-lista', onUpdateReady)
+  }, [])
+
+  // Detecta despliegues nuevos: al arrancar se compara la build guardada con la
+  // actual. Si es distinto, se toma un snapshot de seguridad ANTES de tocar nada
+  // y se avisa en el modal (status 'updated'). Los datos nunca se tocan aquí.
+  useEffect(() => {
+    if (safety.status === 'new-schema') return undefined
+    const prev = seenBuild()
+    // En desarrollo no hay despliegues que comparar
+    if (APP_BUILD_ID === 'dev') {
+      markBuildSeen()
+      writeSchemaVersion()
+      return undefined
+    }
+    if (prev && prev !== APP_BUILD_ID) {
+      // Antes de avisar: copia de seguridad de los datos actuales
+      const snap = takeSnapshot(stateRef.current, 'antes de actualizar')
+      setSafety({ status: 'updated', prevBuild: prev, snapshotAt: snap?.at || '' })
+    }
+    markBuildSeen()
+    // A partir de aquí esta versión de los datos es la vigente
+    writeSchemaVersion()
+    return undefined
+  }, [safety.status])
   useEffect(() => {
     let cancelled = false
     loadFromStorage().then(async (data) => {
@@ -257,10 +315,9 @@ export function StoreProvider({ children }) {
     }
     setState((prev) => {
       if (!prev) return prev
-      const products = prev.products.map((prod) => {
-        const item = sale.items.find((i) => i.productId === prod.id)
-        return item ? { ...prod, stock: Math.max(0, prod.stock - item.qty) } : prod
-      })
+      // El stock se descuenta siempre, también en ventas PENDIENTES: la
+      // mercadería queda reservada desde que se registra la factura.
+      const products = deductStockForItems(prev.products, sale.items)
       return { ...prev, products, sales: [...prev.sales, sale], nextInvoice: prev.nextInvoice + 1 }
     })
     return sale
@@ -311,10 +368,8 @@ export function StoreProvider({ children }) {
       if (!prev) return prev
       const sale = prev.sales.find((x) => x.id === saleId)
       if (!sale || sale.status !== 'pendiente') return prev
-      const products = prev.products.map((prod) => {
-        const item = sale.items.find((i) => i.productId === prod.id)
-        return item ? { ...prod, stock: prod.stock + item.qty } : prod
-      })
+      // Se devuelve al inventario lo que la factura tenía reservado
+      const products = restoreStockForItems(prev.products, sale.items)
       const sales = prev.sales.map((x) =>
         x.id === saleId
           ? { ...x, status: 'anulada', annulledAt: new Date().toISOString(), voidReason: 'pendiente_cancelada' }
@@ -329,7 +384,7 @@ export function StoreProvider({ children }) {
   // Edita los productos de una factura PENDIENTE (agregar/quitar/cambiar cantidades
   // y descuento). Devuelve lo quitado al inventario y descuenta lo agregado.
   // Solo aplica a pendientes: las completadas ya tienen FE emitida y no se tocan.
-  const updatePendingSaleItems = (saleId, { items, discountPct } = {}) => {
+  const updatePendingSaleItems = (saleId, { items, discountPct, customer, cashier } = {}) => {
     const s = stateRef.current
     const target = s?.sales.find((x) => x.id === saleId)
     if (!target) return { ok: false, error: 'Factura no encontrada' }
@@ -376,6 +431,11 @@ export function StoreProvider({ children }) {
     const pct = Math.max(0, Math.min(100, Number(discountPct) || 0))
     const subtotal = clean.reduce((sum, i) => sum + i.price * i.qty, 0)
     const total = Math.round((subtotal * (100 - pct)) / 100)
+    // Nombre del cliente / cajero: si vienen, se actualizan (sirve para poner
+    // el cliente a una factura que se dejó sin nombre).
+    const patch = { items: clean, subtotal, discountPct: pct, total }
+    if (typeof customer === 'string') patch.customer = customer.trim()
+    if (typeof cashier === 'string' && cashier.trim()) patch.cashier = cashier.trim()
 
     setState((prev) => {
       if (!prev) return prev
@@ -387,9 +447,7 @@ export function StoreProvider({ children }) {
         const next = prod.stock + oldQty(prod.id) - (newQty.get(prod.id) || 0)
         return next === prod.stock ? prod : { ...prod, stock: Math.max(0, next) }
       })
-      const sales = prev.sales.map((x) =>
-        x.id === saleId ? { ...x, items: clean, subtotal, discountPct: pct, total } : x,
-      )
+      const sales = prev.sales.map((x) => (x.id === saleId ? { ...x, ...patch } : x))
       return { ...prev, products, sales }
     })
     showToast(`Factura pendiente actualizada · ${formatMoney(total)}`)
@@ -555,6 +613,63 @@ export function StoreProvider({ children }) {
   const deleteProduct = (id) => {
     setState((prev) => (prev ? { ...prev, products: prev.products.filter((p) => p.id !== id) } : prev))
     showToast('Producto eliminado', 'warning')
+  }
+
+  // ---------- Reabastecimiento (entradas de mercadería) ----------
+  // Suma unidades a productos que YA existen en el inventario (no crea nuevos).
+  // `lines`: [{ productId, qty, cost? }] — `cost` es el nuevo costo de compra
+  // unitario; si viene > 0, reemplaza el costo del producto (sirve para subir o
+  // bajar el costo cuando el proveedor cambia de precio). Queda registrada la
+  // entrada con su costo total para saber en qué se invirtió la plata.
+  const restockProducts = (lines, { note = '' } = {}) => {
+    const s = stateRef.current
+    if (!s) return { ok: false, error: 'Datos no cargados' }
+
+    const clean = []
+    for (const l of Array.isArray(lines) ? lines : []) {
+      const qty = Math.floor(Number(l?.qty) || 0)
+      if (qty <= 0) continue
+      const prod = s.products.find((p) => p.id === l.productId)
+      if (!prod) continue
+      clean.push({
+        productId: prod.id,
+        name: prod.name,
+        emoji: prod.emoji,
+        qty,
+        cost: Math.max(0, Number(l.cost) || 0),
+      })
+    }
+    if (!clean.length) {
+      showToast('Escribe al menos una cantidad mayor a 0', 'warning')
+      return { ok: false, error: 'Sin cantidades' }
+    }
+
+    const entry = {
+      id: uid(),
+      date: new Date().toISOString(),
+      by: currentUser?.name || '',
+      note: String(note || '').trim(),
+      lines: clean,
+      units: clean.reduce((a, l) => a + l.qty, 0),
+      cost: Math.round(clean.reduce((a, l) => a + l.cost * l.qty, 0)),
+    }
+
+    setState((prev) => {
+      if (!prev) return prev
+      const byId = new Map(clean.map((l) => [l.productId, l]))
+      const products = prev.products.map((p) => {
+        const line = byId.get(p.id)
+        if (!line) return p
+        const next = { ...p, stock: (Number(p.stock) || 0) + line.qty }
+        // El costo solo se actualiza si se recibió uno nuevo (> 0)
+        if (line.cost > 0) next.cost = line.cost
+        return next
+      })
+      return { ...prev, products, stockEntries: [entry, ...(prev.stockEntries || [])].slice(0, 100) }
+    })
+
+    showToast(`Inventario reabastecido · ${entry.units} unidad(es) agregadas`)
+    return { ok: true, entry }
   }
 
   // ---------- Usuarios ----------
@@ -821,6 +936,48 @@ export function StoreProvider({ children }) {
     }
   }, [loadDevDemoData])
 
+  // ---------- Datos a salvo ante actualizaciones ----------
+
+  // Copia de seguridad inmediata de los datos actuales (el usuario la puede
+  // descargar antes de cerrar). No cambia nada del estado.
+  const createSafetySnapshot = () => {
+    const s = stateRef.current
+    if (!s) return null
+    const meta = takeSnapshot(s, 'manual')
+    if (meta) showToast('Copia de seguridad guardada en este dispositivo')
+    else showToast('No se pudo guardar la copia de seguridad', 'warning')
+    return meta
+  }
+
+  // Vuelve a una copia guardada. Se usa desde la alerta de actualización si
+  // algo salió mal: restaura el estado tal como estaba antes.
+  const restoreSafetySnapshot = (at) => {
+    const snap = listSnapshots().find((s) => s.at === at) || listSnapshots()[0]
+    if (!snap?.state) return false
+    setState(normalizeState(snap.state))
+    // La red de seguridad de ventas se sincroniza con lo restaurado
+    saveSalesGuard(snap.state.sales || [])
+    showToast('Datos restaurados desde la copia de seguridad')
+    return true
+  }
+
+  // Aplica la actualización: activa el service worker nuevo y recarga.
+  // NUNCA se recarga solo: se decide aquí, con el usuario viendo la alerta.
+  const applyUpdate = () => {
+    // Copia de seguridad de los datos actuales antes de cambiar de código
+    takeSnapshot(stateRef.current, 'antes de actualizar')
+    try {
+      navigator.serviceWorker?.getRegistration().then((reg) => {
+        reg?.waiting?.postMessage({ type: 'SKIP_WAITING' })
+      })
+    } catch { /* sin service worker: un reload normal basta */ }
+    // Un pequeño retardo deja que el SW se active antes de recargar
+    setTimeout(() => window.location.reload(), 150)
+  }
+
+  // Cierra la alerta de "se actualizó": el usuario ya revisó que todo sigue bien
+  const acknowledgeUpdate = () => setSafety({ status: 'ok' })
+
   // Exportar respaldo JSON (descarga) e importar respaldo
   const exportBackup = () => {
     const s = stateRef.current
@@ -867,7 +1024,11 @@ export function StoreProvider({ children }) {
     () => ({
       ready: !!state,
       products: state?.products || [],
+      // Estado de los datos ante actualizaciones (lo usa el modal de alerta)
+      safety: { ...safety, schemaVersion: SCHEMA_VERSION, buildId: APP_BUILD_ID },
       sales: state?.sales || [],
+      // Historial de entradas de mercadería (reabastecimientos)
+      stockEntries: state?.stockEntries || [],
       nextInvoice: state?.nextInvoice || 1,
       users: state?.users || [],
       debts: state?.debts || [],
@@ -895,6 +1056,10 @@ export function StoreProvider({ children }) {
       loadDevDemoData,
       exportBackup,
       importBackup,
+      createSafetySnapshot,
+      restoreSafetySnapshot,
+      acknowledgeUpdate,
+      applyUpdate,
       addSale,
       confirmSalePayment,
       cancelPendingSale,
@@ -904,6 +1069,7 @@ export function StoreProvider({ children }) {
       addProduct,
       updateProduct,
       deleteProduct,
+      restockProducts,
       addUser,
       updateUser,
       deleteUser,

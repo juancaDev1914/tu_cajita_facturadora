@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar.jsx'
 import MobileTopbar from './components/MobileTopbar.jsx'
 import BottomNav from './components/BottomNav.jsx'
 import Toast from './components/Toast.jsx'
+import UpdateAlert from './components/UpdateAlert.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import LoginView from './views/LoginView.jsx'
 import SetupWizard from './views/SetupWizard.jsx'
@@ -57,13 +58,40 @@ function ViewLoader() {
   )
 }
 
+// Al tocar cualquier campo de escritura, su contenido queda seleccionado: se
+// borra y se escribe de una, sin tener que seleccionar a mano. Se ignoran los
+// selectores de fecha/color, donde seleccionar el texto no aporta nada.
+const SELECT_ALL_TYPES = new Set(['text', 'number', 'search', 'tel', 'password', 'email', 'url'])
+
+function useSelectAllOnFocus() {
+  useEffect(() => {
+    const onFocusIn = (e) => {
+      const el = e.target
+      if (!el || el.tagName !== 'INPUT' || !SELECT_ALL_TYPES.has(el.type)) return
+      // requestAnimationFrame: el input ya tiene el valor final cuando se selecciona
+      requestAnimationFrame(() => {
+        try {
+          el.select()
+        } catch {
+          /* algunos tipos de input no admiten select() */
+        }
+      })
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
+  }, [])
+}
+
 function Shell() {
-  const { currentUser, ready, needsSetup, settings, cash, isOnline, toast, dismissToast, logout } = useStore()
+  const { currentUser, ready, needsSetup, settings, cash, isOnline, toast, dismissToast, logout, safety } = useStore()
   const [view, setView] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('view')
     return fromUrl && VIEW_TITLES[fromUrl] ? fromUrl : 'pos'
   })
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Los campos de escritura se seleccionan solos al enfocarlos
+  useSelectAllOnFocus()
 
   // Vistas permitidas = rol × módulos activos en configuración
   const modules = settings?.modules || ALL_ADMIN_VIEWS
@@ -93,7 +121,18 @@ function Shell() {
 
   if (!ready) return <LoadingScreen />
 
-  // 1) Sin configuración inicial → asistente (solo primera vez)
+  // 1) Datos de una versión MÁS nueva → se bloquea la app con la alerta.
+  // No se monta NADA más: así nada puede guardar o sobrescribir esos datos.
+  if (safety.status === 'new-schema') {
+    return (
+      <>
+        <UpdateAlert />
+        <Toast toast={toast} onClose={dismissToast} />
+      </>
+    )
+  }
+
+  // 2) Sin configuración inicial → asistente (solo primera vez)
   if (needsSetup) return (
     <>
       <SetupWizard />
@@ -101,12 +140,13 @@ function Shell() {
     </>
   )
 
-  // 2) Sin sesión → login
+  // 3) Sin sesión → login
   if (!currentUser) {
     return (
       <>
         <LoginView />
         <Toast toast={toast} onClose={dismissToast} />
+        <UpdateAlert />
       </>
     )
   }
@@ -172,6 +212,9 @@ function Shell() {
       />
 
       <Toast toast={toast} onClose={dismissToast} />
+
+      {/* Aviso de actualización: los datos siguen intactos tras un despliegue */}
+      <UpdateAlert />
     </div>
   )
 }
