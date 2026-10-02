@@ -112,6 +112,9 @@ export default function CashReport({ report, settings, title = 'REPORTE DE CIERR
         )}
         {Number(s.otherIncome) > 0 && <span>Ingresos extra: {formatMoney(s.otherIncome)}</span>}
         {Number(s.withdrawals) > 0 && <span>Retiros: −{formatMoney(s.withdrawals)}</span>}
+        {Number(s.changeOut) > 0 && (
+          <span>Cambio devuelto en pagos fuera del cajón: −{formatMoney(s.changeOut)}</span>
+        )}
         {Number(s.nextOpeningCash) > 0 && (
           <span>Base para el día siguiente: {formatMoney(s.nextOpeningCash)}</span>
         )}

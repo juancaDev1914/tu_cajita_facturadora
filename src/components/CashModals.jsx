@@ -296,6 +296,12 @@ export function CloseCashModal({ onClose }) {
               <span>{formatMoney(summary.bankedRevenue)}</span>
             </div>
           )}
+          {Number(summary.changeOut) > 0 && (
+            <div className="cash-row minus">
+              <span>− Cambio devuelto en esas ventas (salió del cajón en efectivo)</span>
+              <span>−{formatMoney(summary.changeOut)}</span>
+            </div>
+          )}
           {Number(otherIncome) > 0 && (
             <div className="cash-row">
               <span>+ Ingresos extra</span>

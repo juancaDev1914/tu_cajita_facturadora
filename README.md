@@ -178,7 +178,10 @@ Elementos UI compartidos entre vistas:
       • 💳 Tarjeta
       • 🏦 Transferencia
       • 📱 Nequi / Daviplata
-   └─ Para efectivo: cálculo automático de cambio
+   └─ Monto recibido: se escribe para CUALQUIER medio de pago
+      • Viene precargado con el total; se corrige si el cliente paga distinto
+      • Si paga de más → cálculo automático del cambio a devolver en efectivo
+      • Si paga de menos → avisa cuánto falta y no deja confirmar la venta
 
 5. Confirmación
    └─ Generación de número de factura
@@ -243,7 +246,8 @@ Elementos UI compartidos entre vistas:
 - ✏️ **Edición de pendientes:** Agrega, quita o cambia productos, el descuento y el nombre del cliente de una factura pendiente (Historial → *Editar* o POS → ⏳ Pendientes → *Editar*); el stock y el total se recalculan al guardar
 - 📦 **Stock en las pendientes:** Una factura pendiente descuenta el inventario desde que se registra (la mercadería queda reservada aunque esté fiada); si se cancela, el stock vuelve al inventario
 - 🖨️ **Ticket tras cobrar:** Al confirmar el pago de una factura pendiente se muestra el ticket con la factura electrónica, listo para imprimir (POS e Historial)
-- 💸 **Aviso de cambio:** Al cobrar en efectivo, la notificación del cambio a devolver se queda 15 segundos en pantalla (se puede tocar para cerrarla antes)
+- 💸 **Aviso de cambio:** Cuando el cliente paga de más (con cualquier medio, por ejemplo una transferencia), la notificación del cambio a devolver se queda 15 segundos en pantalla (se puede tocar para cerrarla antes)
+- 🏦 **Cambio en pagos por transferencia:** Si el cliente transfiere de más y el sobrante se le devuelve en efectivo, ese efectivo sale del cajón y se descuenta en el arqueo (aparece como “Cambio devuelto en pagos fuera del cajón”)
 - ⚠️ **Anulación:** Solo administradores pueden anular ventas (restaura el stock automáticamente)
 
 **Estructura de una venta:**
@@ -260,8 +264,8 @@ Elementos UI compartidos entre vistas:
   discountPct: 10,            // Porcentaje de descuento
   total: 13500,               // Total final
   paymentMethod: "efectivo",  // Medio de pago (null mientras esté pendiente)
-  received: 15000,            // Efectivo recibido (si aplica)
-  change: 1500,               // Cambio a devolver
+  received: 15000,            // Monto recibido (cualquier medio de pago)
+  change: 1500,               // Cambio a devolver (siempre en efectivo)
   status: "completada",       // Estado: pendiente / completada / anulada
   paidAt: "...",              // Confirmación del pago (si aplica)
   pendingSince: "...",        // Desde cuándo está pendiente (si aplica)
@@ -365,14 +369,21 @@ que todas las ventas de la sesión entran en el mismo arqueo.
 |-------|----------------|
 | Efectivo inicial | Dinero con el que se abrió el cajón |
 | Ventas en el cajón | Solo los medios de pago físicos (lo de tarjeta/transferencia no está en el cajón) |
+| **Cambio devuelto** | Efectivo devuelto a clientes que pagaron de más con transferencia/tarjeta (sale del cajón) |
 | **Retiros / egresos** | Entregas al patrón, pagos con dinero de la caja |
 | Ingresos extra | Recargas, pago de fiado en efectivo, etc. |
 | Dinero contado | Lo que realmente hay en el cajón → calcula faltante/sobrante |
 | **Base para el día siguiente** | Cuánta plata se deja en el cajón para abrir mañana |
 
 ```
-DEBE HABER = Efectivo inicial + Ventas en el cajón + Ingresos extra − Retiros
+DEBE HABER = Efectivo inicial + Ventas en el cajón + Ingresos extra − Retiros − Cambio devuelto
 ```
+
+> **💸 Cambio en transferencias:** si un cliente paga una venta de $10.000 por
+> transferencia con $13.500 y le devuelves $3.500 en efectivo, el cajón
+> **pierde** esos $3.500. Por eso el arqueo resta el “cambio devuelto” de las
+> ventas pagadas fuera del cajón; en las cobradas en efectivo no se resta nada
+> (el cajón ya solo recibió el total de la venta).
 
 > **⚠️ "Otros medios" en $0 no significa que no hubo transferencias.** La tarjeta
 > *🏦 Otros medios* suma únicamente los medios que están **fuera** del cajón. Si

@@ -1,7 +1,7 @@
 {
   "name": "tu-cajita-facturadora",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Tu Cajita Facturadora — POS offline-first para tiendas y restaurantes. Producción: https://tu-cajita-facturadora.vercel.app/",
   "homepage": "https://tu-cajita-facturadora.vercel.app/",
   "repository": {
@@ -13,7 +13,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node scripts/test-stock.mjs && node scripts/test-safety.mjs",
+    "test": "node scripts/test-stock.mjs && node scripts/test-safety.mjs && node scripts/test-payments.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

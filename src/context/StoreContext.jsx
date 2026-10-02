@@ -6,6 +6,7 @@ import { DEFAULT_SETTINGS, settingsFromPreset, withCashModule } from '../data/bu
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
 import { setCurrency } from '../utils/format.js'
 import { emptyCash, normalizeCash, cashSessionSummary, sessionSales } from '../utils/cash.js'
+import { paymentAmounts } from '../utils/payments.js'
 import { emitElectronicInvoice } from '../utils/einvoice.js'
 import { TOAST_LONG_MS } from '../utils/toast.js'
 import { debtRemaining, deductStockForItems, restoreStockForItems, pendingSalesToReceivables, releaseReceivableForSale } from '../utils/debts.js'
@@ -336,15 +337,19 @@ export function StoreProvider({ children }) {
       return null
     }
     const total = Number(target.total) || 0
-    const cashMethod = paymentMethod === 'efectivo' || paymentMethod === 'nequi'
-    const receivedNum = cashMethod ? Math.max(Number(received) || 0, total) : total
+    // El monto recibido aplica a CUALQUIER medio de pago: si el cliente
+    // transfiere (o paga con tarjeta) de más, el sobrante se le devuelve en
+    // efectivo y queda registrado como `change`. Nunca se cobra de menos.
+    const { received: paidIn, change } = paymentAmounts(total, received)
+    // Nunca se registra un cobro menor al total (defensa si llega desde otro punto)
+    const receivedNum = Math.max(paidIn, total)
     const paidAt = new Date().toISOString()
     const patch = {
       status: 'completada',
       paidAt,
       paymentMethod,
       received: receivedNum,
-      change: cashMethod ? Math.max(0, receivedNum - total) : 0,
+      change,
       sessionId: s.cash?.open?.id || target.sessionId || null,
     }
     // Pago confirmado -> factura electrónica

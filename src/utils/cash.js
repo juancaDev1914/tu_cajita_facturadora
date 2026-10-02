@@ -103,15 +103,22 @@ export function cashSessionSummary({ sales = [], session, settings, until, produ
   let units = 0
   let discountTotal = 0
   let changes = 0
+  // Cambio devuelto en ventas pagadas FUERA del cajón (transferencia, tarjeta…):
+  // esa plata salió del cajón en efectivo, así que hay que restarla del arqueo.
+  // En efectivo NO se resta: el cajón ya solo recibió el total de la venta.
+  let changeOutOfDrawer = 0
   // Costo actual del catálogo: respaldo para items de venta sin costo congelado
   const costIndex = buildCostIndex(products)
   const productMap = new Map()
   const cashierMap = new Map()
   for (const s of done) {
-    revenue += Number(s.total) || 0
+    const total = Number(s.total) || 0
+    revenue += total
     units += (s.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)
     discountTotal += Math.round(((Number(s.subtotal) || 0) * (Number(s.discountPct) || 0)) / 100)
-    changes += Number(s.change) || 0
+    const saleChange = Number(s.change) || 0
+    changes += saleChange
+    if (saleChange > 0 && !drawerIds.includes(s.paymentMethod)) changeOutOfDrawer += saleChange
     // El descuento se reparte entre los items para que la utilidad por producto
     // sea la real (mismo criterio que profitByProduct).
     const grossItems = (s.items || []).reduce((a, i) => a + num(i.price) * num(i.qty), 0)
@@ -167,7 +174,10 @@ export function cashSessionSummary({ sales = [], session, settings, until, produ
   // dinero contado menos esa base.
   const nextOpeningCash = roundMoney(session?.nextOpeningCash)
   const countedCash = Number(session?.countedCash)
-  const expectedCash = roundMoney(openingCash + drawerRevenue + otherIncome - withdrawals)
+  const changeOut = roundMoney(changeOutOfDrawer)
+  // El cambio devuelto en ventas pagadas por transferencia/tarjeta salió del
+  // cajón en efectivo, así que se resta (si no, el arqueo daría sobrante).
+  const expectedCash = roundMoney(openingCash + drawerRevenue + otherIncome - withdrawals - changeOut)
   const difference = Number.isFinite(countedCash) ? roundMoney(countedCash - expectedCash) : null
 
   return {
@@ -181,7 +191,10 @@ export function cashSessionSummary({ sales = [], session, settings, until, produ
     units,
     revenue: roundMoney(revenue),
     discountTotal: roundMoney(discountTotal),
+    // Total de cambio devuelto en la sesión
     changes: roundMoney(changes),
+    // Cambio devuelto en ventas que NO entraron en el cajón (se resta al arqueo)
+    changeOut,
     // Ganancia de la sesión: total cobrado − costo de lo vendido
     cost: roundMoney(profit.cost),
     profit: roundMoney(profit.profit),

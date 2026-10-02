@@ -7,16 +7,19 @@ import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
 import SaleReceipt from '../components/SaleReceipt.jsx'
 import { QtyStepper } from '../components/QtyInput.jsx'
 import { useStore } from '../context/StoreContext.jsx'
+import { cashDrawerIdsOf } from '../utils/cash.js'
 import { haptic, TAP, SUCCESS } from '../utils/haptics.js'
 import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS } from '../utils/format.js'
+import { paymentAmounts, receivedLabel, changeHint } from '../utils/payments.js'
 import { TOAST_LONG_MS } from '../utils/toast.js'
-
-const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
 
 export default function POSView({ user }) {
   const { products, sales, addSale, cancelPendingSale, showToast, isOnline, settings, cashOpen, requireOpenCash } =
     useStore()
   const paymentMethods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
+  // Medios cuyo dinero sí entra al cajón físico (para saber si el cambio devuelto
+  // en una transferencia sale del cajón o no)
+  const drawerIds = cashDrawerIdsOf(settings)
   // Con requireOpenCash activo no se puede cobrar sin caja abierta (Configuración).
   // Si el módulo de caja está desactivado, la barra y el bloqueo se ocultan.
   const cashModuleOn = !Array.isArray(settings?.modules) || settings.modules.includes('caja')
@@ -127,8 +130,9 @@ export default function POSView({ user }) {
   }
 
   const completeSale = () => {
-    const receivedNum = Number(receiveStr) || 0
-    const change = Math.max(0, receivedNum - total)
+    // Se admite que el cliente pague de más (el sobrante se le devuelve en
+    // efectivo) o de menos solo en pagos parciales de medios no efectivo.
+    const { received: receivedNum, change } = paymentAmounts(total, receiveStr)
     const sale = addSale({
       date: new Date().toISOString(),
       cashier: cashier.trim() || 'Cajero',
@@ -147,7 +151,7 @@ export default function POSView({ user }) {
     clearCart()
     haptic(SUCCESS)
     // El cambio a devolver se anuncia con una notificación más larga (se lee mejor)
-    if (isCashMethod(paymentMethod) && change > 0) {
+    if (change > 0) {
       showToast(`Cambio a devolver: ${formatMoney(change)} · Venta ${formatMoney(total)}`, 'success', TOAST_LONG_MS)
     } else {
       showToast('Venta registrada · ' + formatMoney(total))
@@ -178,8 +182,9 @@ export default function POSView({ user }) {
     showToast('Venta pendiente · el stock ya está descontado · la FE sale al cobrar', 'warning')
   }
 
-  const receivedNum = () => Number(receiveStr) || 0
-  const changeCalc = () => receivedNum() - total
+  // Todo medio de pago pide el monto recibido: si el cliente paga de más, el
+  // sobrante se le devuelve en efectivo (y queda registrado como cambio).
+  const amounts = () => paymentAmounts(total, receiveStr)
   const saleNumber = (n) => String(n).padStart(6, '0')
   return (
     <div className="pos-layout">
@@ -385,7 +390,7 @@ export default function POSView({ user }) {
               <button className="btn-hold" onClick={holdSale}>⏸ Dejar pendiente</button>
               <button
                 className="btn-primary"
-                disabled={isCashMethod(paymentMethod) && receivedNum() < total - 1}
+                disabled={amounts().missing > 0}
                 onClick={completeSale}
               >
                 ✅ Confirmar venta
@@ -404,31 +409,37 @@ export default function POSView({ user }) {
                 className={`pay-method ${paymentMethod === m.id ? 'active' : ''}`}
                 onClick={() => {
                   setPaymentMethod(m.id)
-                  setReceiveStr(m.id === 'efectivo' ? String(total) : '')
+                  // Arranca con el total: si el cliente paga distinto, se corrige
+                  setReceiveStr(String(total))
                 }}
               >
                 {m.label}
               </button>
             ))}
           </div>
-          {isCashMethod(paymentMethod) && (
-            <div className="pay-cash">
-              <label>Efectivo recibido</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                className="input input-lg"
-                value={receiveStr}
-                onChange={(e) => setReceiveStr(e.target.value)}
-                autoFocus
-              />
-              <div className={`pay-change ${changeCalc() < 0 ? 'bad' : ''}`}>
-                {changeCalc() < 0
-                  ? `Faltan ${formatMoney(Math.abs(changeCalc()))}`
-                  : `Cambio a devolver: ${formatMoney(changeCalc())}`}
-              </div>
+          <div className="pay-cash">
+            <label>{receivedLabel(paymentMethod, paymentMethods)}</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="input input-lg"
+              value={receiveStr}
+              onChange={(e) => setReceiveStr(e.target.value)}
+              autoFocus
+            />
+            <div className={`pay-change ${amounts().missing > 0 ? 'bad' : ''}`}>
+              {amounts().missing > 0
+                ? `Faltan ${formatMoney(amounts().missing)}`
+                : amounts().change > 0
+                  ? `Cambio a devolver: ${formatMoney(amounts().change)}`
+                  : 'Pago exacto, sin cambio'}
             </div>
-          )}
+            {amounts().change > 0 && (
+              <small className="muted">
+                {changeHint(amounts().received, amounts().change, paymentMethod, drawerIds)}
+              </small>
+            )}
+          </div>
           <p className="pay-note">
             ✅ <strong>Confirmar venta</strong> emite la factura electrónica ahora · ⏸ <strong>Dejar pendiente</strong> guarda la
             venta y la FE se emite al cobrar

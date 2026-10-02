@@ -149,6 +149,12 @@ export default function CashView() {
                 <span>− Retiros registrados</span>
                 <span>{formatMoney(summary.withdrawals)}</span>
               </div>
+              {Number(summary.changeOut) > 0 && (
+                <div className="cash-row minus">
+                  <span>− Cambio devuelto en pagos que no entraron en efectivo</span>
+                  <span>−{formatMoney(summary.changeOut)}</span>
+                </div>
+              )}
               <div className="cash-row">
                 <span>+ Ingresos extra</span>
                 <span>{formatMoney(summary.otherIncome)}</span>

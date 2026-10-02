@@ -5,6 +5,7 @@ import EditPendingSaleModal from '../components/EditPendingSaleModal.jsx'
 import SaleReceipt from '../components/SaleReceipt.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDateTime, paymentLabel, saleNumberToString } from '../utils/format.js'
+import { paymentAmounts } from '../utils/payments.js'
 
 export default function SalesView({ owner = null, canVoid = false }) {
   const { sales, voidSale, settings, cancelPendingSale, issueElectronicInvoice } = useStore()
@@ -26,6 +27,8 @@ export default function SalesView({ owner = null, canVoid = false }) {
 
   const detail = detailId ? sales.find((s) => s.id === detailId) || null : null
   const editPending = editPendingId ? sales.find((s) => s.id === editPendingId) || null : null
+  // Recibido / cambio de la venta abierta (cualquier medio de pago)
+  const detailAmounts = detail ? paymentAmounts(detail.total, detail.received) : null
 
   const filtered = useMemo(() => {
     const from = fromStr ? new Date(fromStr + 'T00:00:00') : null
@@ -223,8 +226,13 @@ export default function SalesView({ owner = null, canVoid = false }) {
               <p>Descuento {detail.discountPct}%: −{formatMoney(Math.round((detail.subtotal * detail.discountPct) / 100))}</p>
             )}
             <p className="dt-total"><strong>Total: {formatMoney(detail.total)}</strong></p>
-            {isCash(detail.paymentMethod) && (
-              <p>Recibido: {formatMoney(detail.received)} · Cambio: {formatMoney(detail.change)}</p>
+            {detail.status === 'completada' && (
+              // El monto recibido y el cambio se muestran para cualquier medio
+              // de pago: el sobrante siempre se devuelve en efectivo.
+              <p>
+                Recibido: {formatMoney(detailAmounts.received)}
+                {detailAmounts.change > 0 && ` · Cambio: ${formatMoney(detailAmounts.change)}`}
+              </p>
             )}
             {detail.status === 'anulada' && (
               <p className="badge danger">Anulada {detail.annulledAt ? fmtDateTime(new Date(detail.annulledAt)) : ''}</p>
@@ -347,8 +355,4 @@ export default function SalesView({ owner = null, canVoid = false }) {
   function formatNumberToString(n) {
     return saleNumberToString(n)
   }
-}
-
-function isCash(id) {
-  return id === 'efectivo' || id === 'nequi'
 }

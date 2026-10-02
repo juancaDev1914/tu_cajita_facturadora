@@ -2,13 +2,16 @@ import { useState } from 'react'
 import Modal from './Modal.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, saleNumberToString, FALLBACK_PAYMENTS } from '../utils/format.js'
-
-// Mismos medios "de cajón" que el POS (efectivo / Nequi piden recibido y cambio)
-const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
+import { cashDrawerIdsOf } from '../utils/cash.js'
+import { paymentAmounts, receivedLabel, changeHint } from '../utils/payments.js'
 
 /**
  * Confirma el pago de una venta PENDIENTE y, al hacerlo, emite la factura
  * electrónica. Se usa desde el POS (lista de pendientes) y del Historial.
+ *
+ * El monto recibido se pregunta para CUALQUIER medio de pago: a veces el
+ * cliente transfiere o paga con tarjeta de más y el sobrante se le devuelve
+ * en efectivo, así que queda registrado como `change`.
  */
 export default function ConfirmPaymentModal({ sale, onClose, onPaid }) {
   const { confirmSalePayment, settings, cashOpen, requireOpenCash } = useStore()
@@ -21,17 +24,15 @@ export default function ConfirmPaymentModal({ sale, onClose, onPaid }) {
   if (!sale) return null
 
   const total = Number(sale.total) || 0
-  const received = Number(receiveStr) || 0
-  const change = Math.max(0, received - total)
-  const cashMethod = isCashMethod(method)
-  const short = cashMethod && received < total
+  const { received, change, missing } = paymentAmounts(total, receiveStr)
+  const short = missing > 0
   const cashClosed = cashModuleOn && requireOpenCash && !cashOpen
 
   const confirm = () => {
     if (short) return
     const done = confirmSalePayment(sale.id, {
       paymentMethod: method,
-      received: cashMethod ? received : total,
+      received,
     })
     if (done) {
       onClose?.()
@@ -66,7 +67,8 @@ export default function ConfirmPaymentModal({ sale, onClose, onPaid }) {
             className={`chip ${method === m.id ? 'active' : ''}`}
             onClick={() => {
               setMethod(m.id)
-              setReceiveStr(m.id === 'efectivo' ? String(total) : '')
+              // Arranca con el total: si el cliente paga distinto, se corrige
+              setReceiveStr(String(total))
             }}
           >
             {m.label}
@@ -74,22 +76,27 @@ export default function ConfirmPaymentModal({ sale, onClose, onPaid }) {
         ))}
       </div>
 
-      {cashMethod && (
-        <div className="pay-cash">
-          <label>Efectivo recibido</label>
-          <input
-            type="number"
-            inputMode="decimal"
-            className="input input-lg"
-            value={receiveStr}
-            onChange={(e) => setReceiveStr(e.target.value)}
-            autoFocus
-          />
-          <div className={`pay-change ${change < 0 ? 'bad' : ''}`}>
-            {change < 0 ? `Faltan ${formatMoney(Math.abs(change))}` : `Cambio a devolver: ${formatMoney(change)}`}
-          </div>
+      <div className="pay-cash">
+        <label>{receivedLabel(method, methods)}</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          className="input input-lg"
+          value={receiveStr}
+          onChange={(e) => setReceiveStr(e.target.value)}
+          autoFocus
+        />
+        <div className={`pay-change ${missing > 0 ? 'bad' : ''}`}>
+          {missing > 0
+            ? `Faltan ${formatMoney(missing)}`
+            : change > 0
+              ? `Cambio a devolver: ${formatMoney(change)}`
+              : 'Pago exacto, sin cambio'}
         </div>
-      )}
+        {change > 0 && (
+          <small className="muted">{changeHint(received, change, method, cashDrawerIdsOf(settings))}</small>
+        )}
+      </div>
 
       <p className="pay-note">
         🧾 Al confirmar el pago se emite la factura electrónica <strong>{`FE-${String(sale.number).padStart(6, '0')}`}</strong> de

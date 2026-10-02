@@ -60,6 +60,10 @@ export function buildElectronicInvoice(sale, settings = {}) {
     descuento: discount,
     total: Number(sale.total) || 0,
     medioPago: sale.paymentMethod || null,
+    // Monto que entregó el cliente y efectivo devuelto como cambio.
+    // Se registra para cualquier medio: el sobrante se devuelve en efectivo.
+    recibido: Number(sale.received) || Number(sale.total) || 0,
+    cambioEntregado: Number(sale.change) || 0,
   }
 }
 

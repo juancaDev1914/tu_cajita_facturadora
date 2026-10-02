@@ -1,17 +1,19 @@
 import { formatMoney, fmtDateTime, FALLBACK_PAYMENTS, paymentLabel, saleNumberToString } from '../utils/format.js'
-
-// Los medios de efectivo (efectivo / nequi) son los que muestran recibido y cambio
-const isCashMethod = (id) => id === 'efectivo' || id === 'nequi'
+import { paymentAmounts } from '../utils/payments.js'
 
 /**
  * Ticket imprimible de una venta (usa las clases .receipt para que @media print
  * funcione sin CSS extra). Se muestra tras una venta normal, tras dejar una
  * factura pendiente y también al confirmar el pago de una pendiente (con FE).
+ *
+ * Recibido y cambio se muestran siempre que la venta esté cobrada: aplica a
+ * cualquier medio de pago, porque el sobrante se devuelve en efectivo.
  */
 export default function SaleReceipt({ sale, settings, showPendingNote = true }) {
   if (!sale) return null
   const methods = settings?.paymentMethods?.length ? settings.paymentMethods : FALLBACK_PAYMENTS
   const pending = sale.status === 'pendiente'
+  const { received, change } = paymentAmounts(sale.total, pending ? sale.total : sale.received)
 
   return (
     <>
@@ -45,10 +47,10 @@ export default function SaleReceipt({ sale, settings, showPendingNote = true }) 
           <strong>TOTAL: {formatMoney(sale.total)}</strong>
           <span>Pago: {pending ? '⏳ Pendiente de pago' : paymentLabel(sale.paymentMethod, methods)}</span>
           {sale.eInvoice && <span>FE: {sale.eInvoice.number}</span>}
-          {!pending && isCashMethod(sale.paymentMethod) && (
+          {!pending && (
             <>
-              <span>Recibido: {formatMoney(sale.received)}</span>
-              <span>Cambio: {formatMoney(sale.change)}</span>
+              <span>Recibido: {formatMoney(received)}</span>
+              {change > 0 && <span>Cambio: {formatMoney(change)}</span>}
             </>
           )}
         </div>
