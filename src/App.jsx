@@ -7,7 +7,6 @@ import Toast from './components/Toast.jsx'
 import UpdateAlert from './components/UpdateAlert.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import LoginView from './views/LoginView.jsx'
-import VerifyEmailView from './views/VerifyEmailView.jsx'
 import SetupWizard from './views/SetupWizard.jsx'
 import useBackGuard from './hooks/useBackGuard.js'
 
@@ -84,7 +83,7 @@ function useSelectAllOnFocus() {
 }
 
 function Shell() {
-  const { currentUser, ready, needsSetup, settings, cash, isOnline, toast, dismissToast, logout, safety, pendingVerifyUser } = useStore()
+  const { currentUser, ready, needsSetup, settings, cash, isOnline, toast, dismissToast, logout, safety } = useStore()
   const [view, setView] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('view')
     return fromUrl && VIEW_TITLES[fromUrl] ? fromUrl : 'pos'
@@ -141,17 +140,7 @@ function Shell() {
     </>
   )
 
-  // 3) Login correcto pero correo sin confirmar → pantalla de verificación
-  if (pendingVerifyUser) {
-    return (
-      <>
-        <VerifyEmailView />
-        <Toast toast={toast} onClose={dismissToast} />
-      </>
-    )
-  }
-
-  // 4) Sin sesión → login
+  // 3) Sin sesión → login
   if (!currentUser) {
     return (
       <>

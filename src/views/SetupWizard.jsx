@@ -130,8 +130,8 @@ export default function SetupWizard() {
               <input className="input" type="password" value={adminPass} onChange={(e) => setAdminPass(e.target.value)} placeholder="Mínimo 4 caracteres" />
             </label>
             <p className="autosave-note">
-              📧 Con correo te enviaremos un código de 6 dígitos para confirmar la cuenta. Sin
-              correo, la cuenta queda sin verificación.
+              📧 El correo es solo un dato de contacto: la cuenta no se confirma ni se bloquea
+              por correo, así que puedes dejarlo vacío.
             </p>
           </>
         )}
