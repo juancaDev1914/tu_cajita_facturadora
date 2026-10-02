@@ -5,10 +5,10 @@ import { idbGet, idbSet } from '../db/db.js'
 import { DEFAULT_SETTINGS, settingsFromPreset, withCashModule } from '../data/businessSettings.js'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
 import { setCurrency } from '../utils/format.js'
-import { emptyCash, normalizeCash, cashSessionSummary } from '../utils/cash.js'
+import { emptyCash, normalizeCash, cashSessionSummary, sessionSales } from '../utils/cash.js'
 import { emitElectronicInvoice } from '../utils/einvoice.js'
 import { TOAST_LONG_MS } from '../utils/toast.js'
-import { debtRemaining, deductStockForItems, restoreStockForItems } from '../utils/debts.js'
+import { debtRemaining, deductStockForItems, restoreStockForItems, pendingSalesToReceivables, releaseReceivableForSale } from '../utils/debts.js'
 import {
   APP_BUILD_ID,
   SCHEMA_VERSION,
@@ -24,6 +24,7 @@ import { isPeriodId } from '../utils/payroll.js'
 
 const SESSION_KEY = 'cajita_pos_session'
 const BACKUP_KEY = 'cajita_pos_backup_v1'
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const StoreContext = createContext(null)
 
 // Estado inicial de PRODUCCION: vacio (sin demo)
@@ -349,7 +350,15 @@ export function StoreProvider({ children }) {
     // Pago confirmado -> factura electrónica
     patch.eInvoice = emitElectronicInvoice({ ...target, ...patch }, s.settings)
     setState((prev) =>
-      prev ? { ...prev, sales: prev.sales.map((x) => (x.id === saleId ? { ...x, ...patch } : x)) } : prev,
+      prev
+        ? {
+            ...prev,
+            // Si esta factura ya era una deuda por cobrar del cierre de caja,
+            // se le descuenta: ya no queda nada por cobrar por ella.
+            debts: releaseReceivableForSale(prev.debts, saleId, total),
+            sales: prev.sales.map((x) => (x.id === saleId ? { ...x, ...patch } : x)),
+          }
+        : prev,
     )
     // El cambio a devolver es el aviso más importante del cobro: se queda más tiempo
     if (patch.change > 0) {
@@ -370,12 +379,14 @@ export function StoreProvider({ children }) {
       if (!sale || sale.status !== 'pendiente') return prev
       // Se devuelve al inventario lo que la factura tenía reservado
       const products = restoreStockForItems(prev.products, sale.items)
+      // Una factura anulada ya no se cobra: se saca de la deuda por cobrar del cierre.
+      const debts = releaseReceivableForSale(prev.debts, saleId, Number(sale.total) || 0)
       const sales = prev.sales.map((x) =>
         x.id === saleId
           ? { ...x, status: 'anulada', annulledAt: new Date().toISOString(), voidReason: 'pendiente_cancelada' }
           : x,
       )
-      return { ...prev, products, sales }
+      return { ...prev, products, sales, debts }
     })
     showToast('Factura pendiente cancelada · stock devuelto', 'warning')
     return target
@@ -551,6 +562,20 @@ export function StoreProvider({ children }) {
       until: closedAt,
     })
     const difference = Math.round((counted - summary.expectedCash) * 100) / 100
+
+    // ---- Las facturas PENDIENTES de esta caja pasan a DEUDA POR COBRAR ----
+    // Al cerrar el día, lo que se vendió fiado deja de ser "pendiente de la
+    // caja" y entra a la cartera del cliente: una cuenta por cobrar por cliente
+    // con el total de sus facturas del día (grupadas para no saturar Deudas).
+    const sessionPending = sessionSales(s.sales, withMovements, { until: closedAt }).filter(
+      (x) => x.status === 'pendiente',
+    )
+    const receivables = pendingSalesToReceivables(sessionPending, s.debts, closedAt).map((d) => ({
+      ...d,
+      id: uid(),
+      closingId: session.id,
+    }))
+
     const closing = {
       ...withMovements,
       closedAt,
@@ -561,11 +586,20 @@ export function StoreProvider({ children }) {
       // Efectivo que se entrega = lo contado − la base que queda en el cajón
       deliveredCash: counted - base,
       difference,
+      // Cuánto quedó por cobrar de esta caja (queda congelado en el historial)
+      receivablesCount: receivables.length,
+      receivablesAmount: round2(receivables.reduce((a, d) => a + d.amount, 0)),
       summary,
     }
     setState((prev) =>
       prev
-        ? { ...prev, cash: { open: null, history: [closing, ...(prev.cash?.history || [])] } }
+        ? {
+            ...prev,
+            // Las facturas por cobrar nacen junto con el cierre, en el mismo
+            // guardado: caja cerrada y cartera actualizada a la vez.
+            debts: receivables.length ? [...prev.debts, ...receivables] : prev.debts,
+            cash: { open: null, history: [closing, ...(prev.cash?.history || [])] },
+          }
         : prev,
     )
     if (Math.abs(difference) < 0.01) showToast('Caja cuadrada · cierre registrado ✅')
@@ -575,7 +609,14 @@ export function StoreProvider({ children }) {
         'warning',
       )
     }
-    return { ok: true, closing, difference }
+    if (receivables.length) {
+      showToast(
+        `${receivables.length} cuenta(s) por cobrar por ${formatMoney(closing.receivablesAmount)} pasadas a Deudas 💰`,
+        'success',
+        TOAST_LONG_MS,
+      )
+    }
+    return { ok: true, closing, difference, receivables }
   }
 
   const deleteCashSession = (closingId) => {

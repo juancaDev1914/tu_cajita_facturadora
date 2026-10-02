@@ -4,6 +4,7 @@ import MoneyField from './MoneyField.jsx'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatMoney, fmtDateTime, getCurrencyDecimals } from '../utils/format.js'
 import { cashSessionSummary, sessionDuration } from '../utils/cash.js'
+import { pendingSalesToReceivables } from '../utils/debts.js'
 import { haptic, SUCCESS } from '../utils/haptics.js'
 
 // Montos rápidos según la moneda (COP: 10.000 / 20.000 / 50.000 / 100.000)
@@ -143,7 +144,7 @@ export function CashMethods({ summary }) {
 
 // ============ Cierre de caja (arqueo) ============
 export function CloseCashModal({ onClose }) {
-  const { sales, products, settings, cash, closeCash } = useStore()
+  const { sales, products, settings, cash, closeCash, debts } = useStore()
   const session = cash?.open
 
   const [withdrawals, setWithdrawals] = useState(0)
@@ -156,6 +157,13 @@ export function CloseCashModal({ onClose }) {
   const summary = useMemo(
     () => (session ? cashSessionSummary({ sales, session, settings, products }) : null),
     [sales, session, settings, products],
+  )
+
+  // Lo que al cerrar pasa a "deuda por cobrar" en Deudas: una cuenta por
+  // cliente con todas sus facturas fiadas de esta caja.
+  const receivables = useMemo(
+    () => pendingSalesToReceivables((sales || []).filter((x) => x.status === 'pendiente'), debts),
+    [sales, debts],
   )
 
   if (!session || !summary) return null
@@ -212,6 +220,26 @@ export function CloseCashModal({ onClose }) {
           </span>
         )}
       </div>
+
+      {/* Al cerrar, lo fiado se convierte en deuda por cobrar del cliente */}
+      {receivables.length > 0 && (
+        <div className="alert-box warn">
+          💰 Al cerrar, <strong>{receivables.length} cuenta(s) por cobrar</strong> por{' '}
+          <strong>{formatMoney(receivables.reduce((a, d) => a + d.amount, 0))}</strong> pasan a
+          Deudas → <em>Por cobrar</em>, agrupadas así:
+          <div className="cash-rows" style={{ marginTop: 8 }}>
+            {receivables.slice(0, 8).map((d) => (
+              <div className="cash-row" key={d.saleIds.join('|')}>
+                <span>{d.description}</span>
+                <strong>{formatMoney(d.amount)}</strong>
+              </div>
+            ))}
+            {receivables.length > 8 && (
+              <small className="muted">+{receivables.length - 8} cliente(s) más…</small>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ---------- LA RESPUESTA, arriba y en grande ---------- */}
       <div className="cash-hero">

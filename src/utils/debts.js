@@ -51,6 +51,97 @@ export function restoreStockForItems(products, items) {
   })
 }
 
+// ===== Facturas pendientes -> deuda por cobrar (al cerrar caja) =====
+// Marca de origen en la deuda creada desde el cierre de caja.
+export const RECEIVABLE_SOURCE = 'cierre_caja'
+
+// Agrupa las ventas PENDIENTES por cliente y devuelve las deudas por cobrar que
+// hay que registrar al cerrar la caja. Se agrupa por nombre para no llenar
+// Deudas de una fila por cada factura del mismo cliente: queda una sola
+// "cuenta por cobrar" con todos sus números de factura.
+//
+// Se salta los grupos que ya existen en `debts` (mismos `saleIds`): si se cierra
+// y se vuelve a cerrar, o si ya se registraron, no se duplica la deuda.
+export function pendingSalesToReceivables(sales = [], debts = [], closedAt) {
+  const already = new Set()
+  for (const d of Array.isArray(debts) ? debts : []) {
+    if (d?.type !== 'cobrar' || d?.source !== RECEIVABLE_SOURCE) continue
+    for (const id of Array.isArray(d.saleIds) ? d.saleIds : []) already.add(id)
+  }
+
+  const groups = new Map()
+  for (const s of Array.isArray(sales) ? sales : []) {
+    if (s?.status !== 'pendiente') continue
+    if (already.has(s.id)) continue
+    const total = Math.round(Number(s.total) || 0)
+    if (total <= 0) continue
+    const customer = String(s.customer || '').trim()
+    const key = customer.toLowerCase()
+    const g = groups.get(key) || { customer, amount: 0, saleIds: [], amounts: {}, numbers: [], date: s.date }
+    g.amount += total
+    g.saleIds.push(s.id)
+    // Monto de cada factura dentro del grupo: permite descontar/descontar bien
+    // si después esa factura se cobra o se cancela.
+    g.amounts[s.id] = total
+    g.numbers.push(s.number)
+    if (s.date && (!g.date || s.date < g.date)) g.date = s.date
+    groups.set(key, g)
+  }
+
+  return [...groups.values()].map((g) => {
+    const who = g.customer || 'Cliente sin nombre'
+    const invoices = g.numbers.map((n) => `#${n}`).join(', ')
+    return {
+      type: 'cobrar',
+      description: `Fiado · ${who} (${invoices})`,
+      amount: g.amount,
+      dueDate: '',
+      status: 'pendiente',
+      date: g.date || closedAt || new Date().toISOString(),
+      payments: [],
+      customer: g.customer,
+      source: RECEIVABLE_SOURCE,
+      saleIds: g.saleIds,
+      amounts: g.amounts,
+      invoices: g.numbers,
+      closingId: null,
+    }
+  })
+}
+
+// Sincroniza la deuda por cobrar cuando la factura de origen se PAGA o se
+// CANCELA después del cierre: esa parte ya no se cobra. Si el grupo queda sin
+// facturas, la deuda se elimina; si queda saldo, el monto se recalcula.
+export function releaseReceivableForSale(debts = [], saleId, amount) {
+  const value = Math.round(Number(amount) || 0)
+  if (!saleId || value <= 0) return debts
+  let changed = false
+  const next = debts
+    .filter(Boolean)
+    .map((d) => {
+      if (d.source !== RECEIVABLE_SOURCE) return d
+      if (!Array.isArray(d.saleIds) || !d.saleIds.includes(saleId)) return d
+      changed = true
+      const saleIds = d.saleIds.filter((x) => x !== saleId)
+      const amounts = { ...(d.amounts || {}) }
+      delete amounts[saleId]
+      const amountLeft = Math.max(0, (Number(d.amount) || 0) - value)
+      const invoices = (d.invoices || []).filter((_, i) => d.saleIds[i] !== saleId)
+      const desc = String(d.description || '').replace(/\s*\([^)]*\)\s*$/, '')
+      const inv = invoices.length ? ` (${invoices.map((n) => `#${n}`).join(', ')})` : ''
+      return {
+        ...d,
+        amount: amountLeft,
+        saleIds,
+        amounts,
+        invoices,
+        description: `${desc}${inv}`,
+        status: amountLeft <= 0 ? 'pagada' : d.status,
+      }
+    })
+  return changed ? next.filter((d) => !(d.source === RECEIVABLE_SOURCE && (d.saleIds || []).length === 0)) : debts
+}
+
 export function debtRemaining(debt) {
   const d = debt || {}
   return Math.max(0, (Number(d.amount) || 0) - debtPaid(d))
