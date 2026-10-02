@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useStore } from '../context/StoreContext.jsx'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
+import { isValidEmail } from '../utils/auth.js'
 
 const PRESET_IDS = ['tienda', 'restaurante', 'cafeteria', 'bar', 'farmacia', 'ropa', 'personalizado']
 
 export default function SetupWizard() {
-  const { completeSetup } = useStore()
+  const { completeSetup, skipSetup, hasExistingUsers } = useStore()
   const [step, setStep] = useState(1)
   const [businessName, setBusinessName] = useState('')
   const [businessType, setBusinessType] = useState('tienda')
@@ -14,6 +15,7 @@ export default function SetupWizard() {
   const [adminName, setAdminName] = useState('')
   const [adminUser, setAdminUser] = useState('admin')
   const [adminPass, setAdminPass] = useState('')
+  const [adminEmail, setAdminEmail] = useState('')
   const [error, setError] = useState('')
 
   const next = () => {
@@ -22,10 +24,24 @@ export default function SetupWizard() {
     setStep((s) => Math.min(3, s + 1))
   }
 
+  // Saltar la configuracion: solo para quienes ya tienen cuenta. No borra nada,
+  // solo marca el setup como hecho para llegar al login.
+  const doSkip = () => {
+    const ok = window.confirm(
+      '¿Saltar la configuración?\n\n' +
+      'Se conserva toda la información que ya está en este dispositivo. ' +
+      'Tendrás que iniciar sesión con tu usuario y contraseña actuales.',
+    )
+    if (!ok) return
+    const res = skipSetup()
+    if (!res.ok) setError('No hay ninguna cuenta en este dispositivo todavía')
+  }
+
   const finish = (e) => {
     e.preventDefault()
     if (!adminUser.trim() || adminPass.length < 4) { setError('Admin con clave de minimo 4 caracteres'); return }
-    const res = completeSetup({ businessName, businessType, address, phone, adminName, adminUser, adminPass })
+    if (adminEmail.trim() && !isValidEmail(adminEmail)) { setError('Escribe un correo válido'); return }
+    const res = completeSetup({ businessName, businessType, address, phone, adminName, adminUser, adminPass, adminEmail })
     if (!res.ok) setError('Revisa los datos')
   }
 
@@ -99,9 +115,24 @@ export default function SetupWizard() {
               <input className="input" value={adminUser} onChange={(e) => setAdminUser(e.target.value)} placeholder="admin" />
             </label>
             <label className="login-field">
+              Correo del administrador
+              <input
+                className="input"
+                type="email"
+                value={adminEmail}
+                onChange={(e) => setAdminEmail(e.target.value)}
+                placeholder="tucorreo@empresa.com"
+                autoComplete="email"
+              />
+            </label>
+            <label className="login-field">
               Contraseña *
               <input className="input" type="password" value={adminPass} onChange={(e) => setAdminPass(e.target.value)} placeholder="Mínimo 4 caracteres" />
             </label>
+            <p className="autosave-note">
+              📧 Con correo te enviaremos un código de 6 dígitos para confirmar la cuenta. Sin
+              correo, la cuenta queda sin verificación.
+            </p>
           </>
         )}
 
@@ -110,6 +141,18 @@ export default function SetupWizard() {
           {step < 3 && <button type="button" className="btn-primary" onClick={next}>Siguiente →</button>}
           {step === 3 && <button type="submit" className="btn-primary">✅ Crear mi negocio</button>}
         </div>
+
+        {/* Acceso para quienes ya tenían cuenta: salta el asistente sin perder datos */}
+        {hasExistingUsers && (
+          <div className="setup-skip">
+            <span className="setup-skip-line" />
+            <span className="muted tiny">¿Ya tienes cuenta en este dispositivo?</span>
+            <span className="setup-skip-line" />
+            <button type="button" className="btn-ghost setup-skip-btn" onClick={doSkip}>
+              🔓 Saltar configuración e iniciar sesión
+            </button>
+          </div>
+        )}
       </form>
     </div>
   )

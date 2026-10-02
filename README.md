@@ -611,6 +611,35 @@ cuatro puntos:
    Es la única forma de llevar los datos a otro equipo o de protegerlos si se
    borra el navegador. Conviene hacerlo periódicamente.
 
+### Verificación de correo del administrador
+
+La cuenta de admin se vincula a un correo y confirma su titularidad con un
+**código de 6 dígitos** que la app envía al correo del usuario:
+
+- En el asistente (paso 3) se escribe el correo del admin. Al terminar la app
+  **no inicia sesión**: manda el código y muestra la pantalla *Confirma tu correo*.
+- En el login, si usuario y contraseña son correctos pero el correo sigue sin
+  confirmar, la app tampoco deja entrar: primero hay que escribir el código.
+- El código caduca en **15 minutos** y admite **5 intentos**.
+- El código **nunca se guarda en claro**: solo se persiste su hash junto al id
+  del usuario (`verify.hash`), así nadie puede leerlo del almacenamiento.
+- Se cambia o se vuelve a confirmar en *Configuración → 📧 Correo del
+  administrador*. Al cambiar el correo, la verificación se reinicia.
+- Una cuenta **sin correo** sigue entrando con usuario y contraseña (compatibilidad
+  con instalaciones anteriores).
+
+**Configuración del envío.** La app es local, sin backend, así que el correo se
+manda a un servicio transaccional externo por HTTPS:
+
+```bash
+# .env
+VITE_W3F_ACCESS_KEY=tu_access_key_de_web3forms
+```
+
+Con clave (Web3Forms, https://web3forms.com) el correo llega solo. **Sin clave**
+—o si el servicio falla o no hay red— la app no se bloquea: abre el gestor de
+correo del usuario con el código ya escrito (plan B).
+
 ### Estructura de Datos en IndexedDB
 
 ```

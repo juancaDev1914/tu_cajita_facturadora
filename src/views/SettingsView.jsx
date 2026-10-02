@@ -9,8 +9,11 @@ import { cashDrawerIdsOf } from '../utils/cash.js'
 import { PAYROLL_PERIODS, isPeriodId } from '../utils/payroll.js'
 
 export default function SettingsView() {
-  const { settings, updateSettings, applyPreset } = useStore()
+  const { settings, updateSettings, applyPreset, currentUser, users, setUserEmail, sendVerifyCode, confirmVerifyCode } = useStore()
   const [newPay, setNewPay] = useState('')
+  const [emailDraft, setEmailDraft] = useState(() => currentUser?.email || '')
+  const [codeInput, setCodeInput] = useState('')
+  const [emailMsg, setEmailMsg] = useState('')
   // Medios de pago que suman al cajon fisico (configurable, con fallback a 'efectivo')
   const drawerIds = cashDrawerIdsOf(settings)
 
@@ -225,6 +228,78 @@ export default function SettingsView() {
             )
           })}
         </div>
+      </section>
+
+      <section className="card">
+        <h3>📧 Correo del administrador (confirmación de cuenta)</h3>
+        <div className="form-grid">
+          <label>Correo
+            <input
+              className="input"
+              type="email"
+              value={emailDraft}
+              placeholder="tucorreo@empresa.com"
+              onChange={(e) => setEmailDraft(e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="setup-actions">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={async () => {
+              const res = setUserEmail(currentUser.id, emailDraft)
+              if (!res.ok) setEmailMsg(res.error)
+              else { setEmailMsg('Correo guardado. Confírmalo con el código.'); setCodeInput('') }
+            }}
+          >
+            Guardar correo
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={async () => {
+              const res = await sendVerifyCode(currentUser.id)
+              setEmailMsg(res.ok ? 'Código enviado a tu correo' : res.error)
+            }}
+          >
+            Enviar código
+          </button>
+        </div>
+        {currentUser.email && !currentUser.emailVerified && (
+          <div className="setup-skip" style={{ borderTop: 'none' }}>
+            <label className="login-field">
+              Código recibido
+              <input
+                className="input"
+                inputMode="numeric"
+                maxLength={6}
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value.replace(/\D/g, ''))}
+                placeholder="000000"
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                const res = confirmVerifyCode(codeInput, currentUser.id)
+                setEmailMsg(res.ok ? '✅ Correo confirmado' : res.error)
+                if (res.ok) setCodeInput('')
+              }}
+            >
+              Confirmar código
+            </button>
+          </div>
+        )}
+        {emailMsg && <p className="autosave-note">{emailMsg}</p>}
+        <p className="autosave-note">
+          Estado:{' '}
+          {currentUser.email
+            ? currentUser.emailVerified ? `✅ ${currentUser.email} confirmado` : `⏳ ${currentUser.email} sin confirmar`
+            : '⚠️ Sin correo (la cuenta no exige verificación)'}
+          {` · ${(users || []).filter((u) => u.emailVerified).length} cuenta(s) confirmada(s)`}
+        </p>
       </section>
 
       <DangerZone />

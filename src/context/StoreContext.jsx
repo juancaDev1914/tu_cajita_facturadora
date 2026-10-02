@@ -1,6 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { saleNumberToString, uid, formatMoney } from '../utils/format.js'
-import { hashPassword } from '../utils/auth.js'
+import {
+  hashPassword,
+  generateVerifyCode,
+  isValidEmail,
+  verifyCodeHash,
+  sendVerificationEmail,
+  CODE_TTL_MS,
+  CODE_MAX_ATTEMPTS,
+} from '../utils/auth.js'
 import { idbGet, idbSet } from '../db/db.js'
 import { DEFAULT_SETTINGS, settingsFromPreset, withCashModule } from '../data/businessSettings.js'
 import { BUSINESS_PRESETS } from '../data/businessPresets.js'
@@ -158,6 +166,9 @@ export function StoreProvider({ children }) {
     try { return sessionStorage.getItem(SESSION_KEY) } catch { return null }
   })
   const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true))
+  // Usuario que hizo login correcto pero aún no confirmó su correo.
+  // La app no lo deja entrar hasta verificar la cuenta.
+  const [pendingVerifyId, setPendingVerifyId] = useState(null)
   // Estado de los datos ante actualizaciones:
   //  - 'ok'         -> todo normal
   //  - 'new-schema' -> los datos los creó una versión MÁS nueva: se bloquea
@@ -279,6 +290,12 @@ export function StoreProvider({ children }) {
     )
     if (!u || !u.active) return { ok: false, error: 'Usuario o contraseña incorrectos' }
     if (u.passwordHash !== hashPassword(password)) return { ok: false, error: 'Usuario o contraseña incorrectos' }
+    // El admin se vincula a un correo: si tiene correo y aún no lo confirmó,
+    // la contraseña sola no abre la app (paso obligatorio de verificación).
+    if (u.email && !u.emailVerified) {
+      setPendingVerifyId(u.id)
+      return { ok: false, needVerify: true, error: 'Confirma tu correo para entrar' }
+    }
     setUserId(u.id)
     try { sessionStorage.setItem(SESSION_KEY, u.id) } catch { /* ignore */ }
     showToast(`Bienvenido, ${u.name}`)
@@ -287,8 +304,87 @@ export function StoreProvider({ children }) {
 
   const logout = () => {
     setUserId(null)
+    setPendingVerifyId(null)
     try { sessionStorage.removeItem(SESSION_KEY) } catch { /* ignore */ }
   }
+
+  // ---------- Verificación de correo ----------
+  const patchUser = (userId, patch) =>
+    setState((prev) => (prev
+      ? { ...prev, users: prev.users.map((u) => (u.id === userId ? { ...u, ...patch } : u)) }
+      : prev))
+
+  // Envía (o reenvía) el código de confirmación y guarda su hash + vencimiento.
+  // El código en claro solo existe en memoria: se manda por correo y no se persiste.
+  const sendVerifyCode = async (targetUserId) => {
+    const base = stateRef.current
+    const user = base?.users.find((u) => u.id === targetUserId)
+    if (!user) return { ok: false, error: 'Cuenta no encontrada' }
+    const email = String(user.email || '').trim().toLowerCase()
+    if (!isValidEmail(email)) return { ok: false, error: 'Escribe un correo válido' }
+
+    const code = generateVerifyCode()
+    const now = Date.now()
+    patchUser(user.id, {
+      verify: {
+        hash: verifyCodeHash(user.id, code),
+        sentAt: now,
+        expiresAt: now + CODE_TTL_MS,
+        attempts: 0,
+      },
+    })
+
+    const res = await sendVerificationEmail({
+      to: email,
+      code,
+      userName: user.name,
+      businessName: base?.settings?.businessName,
+    })
+    if (!res.ok) return { ok: false, error: res.error || 'No se pudo enviar el correo' }
+    showToast(
+      res.via === 'mailto'
+        ? 'Se abrió tu gestor de correo con el código. Envíalo para continuar.'
+        : `Código enviado a ${email}`,
+    )
+    return { ok: true }
+  }
+
+  // Confirma el código: si es correcto marca el correo como confirmado y deja
+  // entrar al usuario que venía del login.
+  const confirmVerifyCode = (code, targetUserId) => {
+    const base = stateRef.current
+    const user = base?.users.find((u) => u.id === targetUserId)
+    if (!user) return { ok: false, error: 'Cuenta no encontrada' }
+    const v = user.verify
+    if (!v) return { ok: false, error: 'Pide un código nuevo' }
+    if (v.expiresAt < Date.now()) return { ok: false, error: 'El código expiró. Pide uno nuevo' }
+    if ((v.attempts || 0) >= CODE_MAX_ATTEMPTS) {
+      return { ok: false, error: 'Demasiados intentos. Pide un código nuevo' }
+    }
+    const clean = String(code || '').replace(/\D/g, '')
+    if (clean.length !== 6 || v.hash !== verifyCodeHash(user.id, clean)) {
+      patchUser(user.id, { verify: { ...v, attempts: (v.attempts || 0) + 1 } })
+      const left = CODE_MAX_ATTEMPTS - ((v.attempts || 0) + 1)
+      return { ok: false, error: `Código incorrecto. Te ${left === 1 ? 'queda' : 'quedan'} ${left} intento(s)` }
+    }
+    patchUser(user.id, { emailVerified: true, verifiedAt: new Date().toISOString(), verify: null })
+    setUserId(user.id)
+    try { sessionStorage.setItem(SESSION_KEY, user.id) } catch { /* ignore */ }
+    setPendingVerifyId(null)
+    showToast(`¡Correo confirmado! Bienvenido, ${user.name}`)
+    return { ok: true }
+  }
+
+  // Cambia el correo del usuario: al cambiarlo hay que volver a confirmar
+  const setUserEmail = (userId, email) => {
+    const clean = String(email || '').trim().toLowerCase()
+    if (!isValidEmail(clean)) return { ok: false, error: 'Correo inválido' }
+    patchUser(userId, { email: clean, emailVerified: false, verifiedAt: null, verify: null })
+    showToast('Correo actualizado. Confírmalo para volver a entrar')
+    return { ok: true }
+  }
+
+  const cancelPendingVerify = () => setPendingVerifyId(null)
 
   // ---------- Ventas (solo local) ----------
   // addSale maneja los 3 estados:
@@ -855,13 +951,18 @@ export function StoreProvider({ children }) {
   }
 
   // ---------- Setup inicial / Configuracion del negocio ----------
-  const completeSetup = ({ businessName, businessType, address, phone, adminName, adminUser, adminPass }) => {
+  const completeSetup = ({ businessName, businessType, address, phone, adminName, adminUser, adminPass, adminEmail }) => {
     if (!businessName?.trim()) {
       showToast('Escribe el nombre del negocio', 'warning')
       return { ok: false }
     }
     if (!adminUser?.trim() || !adminPass || adminPass.length < 4) {
       showToast('Crea un admin con clave de minimo 4 caracteres', 'warning')
+      return { ok: false }
+    }
+    const email = String(adminEmail || '').trim().toLowerCase()
+    if (email && !isValidEmail(email)) {
+      showToast('El correo del administrador no es válido', 'warning')
       return { ok: false }
     }
     const base = stateRef.current || buildEmptyState()
@@ -877,6 +978,10 @@ export function StoreProvider({ children }) {
       name: adminName?.trim() || 'Administrador',
       role: 'admin',
       passwordHash: hashPassword(adminPass),
+      // Vinculación con el correo: la cuenta queda pendiente de confirmar
+      email,
+      emailVerified: false,
+      verify: null,
       active: true,
       baseSalary: 0,
       commissionPct: 0,
@@ -896,11 +1001,43 @@ export function StoreProvider({ children }) {
       nextInvoice: Math.max(Number(base.nextInvoice) || 1, nextNumber + 1),
     })
     if (!base.users?.length) {
-      setUserId(admin.id)
-      try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
+      if (email) {
+        // Con correo el admin debe confirmarlo antes de usar la app:
+        // se le envía el código y la app lo deja en la pantalla de verificación.
+        setPendingVerifyId(admin.id)
+        setTimeout(() => { sendVerifyCode(admin.id) }, 60)
+      } else {
+        setUserId(admin.id)
+        try { sessionStorage.setItem(SESSION_KEY, admin.id) } catch { /* ignore */ }
+      }
     }
     const preset = BUSINESS_PRESETS[businessType]
     showToast(`¡${settings.businessName} listo!${preset ? ` Plantilla ${preset.label} aplicada.` : ''}`)
+    return { ok: true }
+  }
+
+  // Salta la configuracion inicial SOLO cuando ya existen usuarios en el
+  // dispositivo (por ejemplo al restaurar un respaldo). No crea usuarios ni
+  // borra datos: unicamente marca el setup como completado para poder entrar
+  // al login con la cuenta que ya existe.
+  const skipSetup = () => {
+    const base = stateRef.current || buildEmptyState()
+    if (!base.users?.length) {
+      showToast('Aun no hay ninguna cuenta en este dispositivo', 'warning')
+      return { ok: false }
+    }
+    setState({
+      ...base,
+      settings: {
+        ...base.settings,
+        businessName: base.settings?.businessName?.trim() || 'Mi negocio',
+        setupCompleted: true,
+      },
+    })
+    // Cierra cualquier sesion: el usuario debe entrar con su cuenta existente.
+    setUserId(null)
+    try { sessionStorage.removeItem(SESSION_KEY) } catch { /* ignore */ }
+    showToast('Configuración saltada. Inicia sesión con tu cuenta.')
     return { ok: true }
   }
 
@@ -1095,6 +1232,15 @@ export function StoreProvider({ children }) {
       dismissToast,
       login,
       logout,
+      // Ya hay cuentas creadas en este dispositivo -> se puede saltar el setup
+      hasExistingUsers: !!(state?.users?.length),
+      skipSetup,
+      // Verificación de correo del admin
+      pendingVerifyUser: state?.users.find((u) => u.id === pendingVerifyId) || null,
+      sendVerifyCode,
+      confirmVerifyCode,
+      setUserEmail,
+      cancelPendingVerify,
       completeSetup,
       updateSettings,
       applyPreset,
@@ -1131,7 +1277,7 @@ export function StoreProvider({ children }) {
       deleteCashSession,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, toast, currentUser, isOnline],
+    [state, toast, currentUser, isOnline, pendingVerifyId],
   )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
